@@ -7,69 +7,7 @@ def moving_average(arr, window_size):
     kernel = np.ones(window_size) / window_size
     return np.convolve(arr, kernel, mode='same')
 
-from scipy.spatial import cKDTree
-
-def estimate_normals(points):
-    # simple finite-difference normals for ordered 2D profile
-    normals = []
-    for i in range(len(points)):
-        if i == 0:
-            tangent = points[i+1] - points[i]
-        elif i == len(points)-1:
-            tangent = points[i] - points[i-1]
-        else:
-            tangent = points[i+1] - points[i-1]
-
-        # perpendicular vector
-        normal = np.array([-tangent[1], tangent[0]])
-        normal /= np.linalg.norm(normal) + 1e-8
-        normals.append(normal)
-
-    return np.array(normals)
-
-
-def icp_point_to_plane_tx(src, dst, max_iter=20):
-    src = src.copy()
-    tree = cKDTree(dst)
-
-    normals = estimate_normals(dst)
-
-    tx_total = 0.0
-
-    for _ in range(max_iter):
-        dist, idx = tree.query(src)
-
-        q = dst[idx]
-        n = normals[idx]
-
-        px, py = src[:, 0], src[:, 1]
-        qx, qy = q[:, 0], q[:, 1]
-        nx, ny = n[:, 0], n[:, 1]
-
-        # Solve least squares for tx
-        A = nx
-        b = nx * (qx - px) + ny * (qy - py)
-
-        # least squares solution
-        tx = np.sum(A * b) / (np.sum(A * A) + 1e-8)
-
-        # apply update
-        src[:, 0] += tx
-        tx_total += tx
-
-    return tx_total, src
-
-class profileData:
-    
-    def __init__(self,name,Xcord,Ycord,):
-        self.name=name
-        self.x=Xcord
-        self.y=Ycord
-        profileNumberMatch = re.search(r"Profile(\d{1})", name)
-        if profileNumberMatch:
-            self.profileNumber = int(profileNumberMatch.group(1))
-
-    def get_baseline_from_profileBorder(self, x ,y, borderPoints):
+def get_baseline_from_profileBorder(x ,y, borderPoints=30):
         n=borderPoints
         profileBordersX = np.concatenate([x[:n], x[-n:]])
         profileBordersY = np.concatenate([y[:n], y[-n:]])
@@ -97,8 +35,19 @@ class profileData:
                 b=coeffs1[1]
         return m,b
 
+
+class profileData:
+    
+    def __init__(self,name,Xcord,Ycord,):
+        self.name=name
+        self.x=Xcord
+        self.y=Ycord
+        profileNumberMatch = re.search(r"Profile(\d{1})", name)
+        if profileNumberMatch:
+            self.profileNumber = int(profileNumberMatch.group(1))
+
     def rotate_pointcloud(self):
-        m,b = self.get_baseline_from_profileBorder(self.x,self.y,30)
+        m,b = get_baseline_from_profileBorder(self.x,self.y)
 
         angle_deg = np.arctan(m)*180/np.pi
 
@@ -109,54 +58,29 @@ class profileData:
         ])
         points =np.column_stack((self.x, self.y))
         rotatedPoints = points @ R.T
-        self.xRot = rotatedPoints[:,0]
-        self.yRot = rotatedPoints[:,1]
+        self.x = rotatedPoints[:,0]
+        self.y = rotatedPoints[:,1]
 
     def translate_floor_to_zero(self):
-        m,b = self.get_baseline_from_profileBorder(self.xRot,self.yRot,30)
-        self.yTrans = self.yRot-b
-        self.xTrans = self.xRot
+        m,b = get_baseline_from_profileBorder(self.x,self.y)
+        self.y = self.y-b
+        self.x = self.x
 
-    #todo heights are weird
     def find_border_points(self):
-        #m,b = self.get_baseline_from_profileBorder(self.xRot,self.yRot,30)
-        #self.height_from_baseline(self.xTrans,self.yTrans,m,b)
-        self.borderPoints = np.empty(len(self.xTrans), dtype=bool)
-        self.profilePoints = np.empty(len(self.yTrans), dtype=bool)
-        for i in range(len(self.yTrans)):
-            if self.yTrans[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
+        
+        self.borderPoints = np.empty(len(self.x), dtype=bool)
+        self.profilePoints = np.empty(len(self.y), dtype=bool)
+        for i in range(len(self.y)):
+            if self.y[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
                 self.profilePoints[i] = True
                 self.borderPoints[i] = False
             else:
                 self.profilePoints[i] = False
                 self.borderPoints[i] = True
 
-
-
-    """
-    # todo: Trimmed ICP
-    # idea: just rotate and set baseplane to z=0 --> then shift in x direction
-    def translation_icp(A, B, iterations=10):
-        A_current = A.copy()
-        t_total = np.zeros(2)
-
-        nbrs = NearestNeighbors(n_neighbors=1).fit(B)
-
-        for _ in range(iterations):
-            distances, indices = nbrs.kneighbors(A_current)
-            B_matched = B[indices[:, 0]]
-
-            # Compute translation
-            t = B_matched.mean(axis=0) - A_current.mean(axis=0)
-
-            # Apply
-            A_current += t
-            t_total += t
-
-        return t_total, A_current
-    """
     
-    #todo return coordinates every time --> and store in self.x
+    # weird heights? TODO: delete
+    # todo return coordinates every time --> and store in self.x
     def height_from_baseline(self,x,y,m,b): # good for profiles where filament is not retractig at the baseline --> for retracting profiles: it takes lower end of filament
         self.heights = -(m * x - y + b) / np.sqrt(m**2 + 1)
         

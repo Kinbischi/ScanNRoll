@@ -19,6 +19,7 @@ for group in profileGroups:
         p.rotate_pointcloud()
         p.translate_floor_to_zero()
         p.find_border_points()
+    group.registerProfiles()
 
 
 fig, axes = plt.subplots(2, 2, figsize=(15.2, 7.5))
@@ -28,8 +29,7 @@ for i, ax in enumerate(axes.flat):
     for j in range(len(group.profiles)):
 
         p=group.profiles[j]
-        ax.scatter(p.xTrans[p.profilePoints], p.yTrans[p.profilePoints], marker='x', s=1, label=str(p.name))
-
+        ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
         ax.legend()
         ax.set_aspect('equal',adjustable='datalim')
 plt.tight_layout()
@@ -42,7 +42,7 @@ fig, axes = plt.subplots(2, 2, figsize=(15.2, 7.5))
 for i, ax in enumerate(axes.flat):
     group = profileGroups[0]
     pVert =group[3]
-    des = np.column_stack((pVert.xTrans, pVert.yTrans,np.random.rand(len(pVert.x)))) #
+    des = np.column_stack((pVert.x, pVert.y,np.random.rand(len(pVert.x)))) #
     for j in range(len(group)-1):
         #ax.scatter(group[j].x, group[j].y, s=1)
         p=group[j]
@@ -64,10 +64,10 @@ for i, ax in enumerate(axes.flat):
         print("Estimated Transform matrix:\n", T_new)
         
         #ax.scatter(source[0,:],source[1,:], marker='x', s=1, label=str(p.name))
-        ax.scatter(p.xTrans[p.profilePoints]-tx_total, p.yTrans[p.profilePoints], marker='x', s=1, label=str(p.name))
+        ax.scatter(p.x[p.profilePoints]-tx_total, p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
 
         #ax.scatter(p.x, p.heights,marker='x', s=1, label=str(p.name))
-        #ax.scatter(p.xTrans, p.yTrans, marker='x', s=1, label=str(p.name))
+        #ax.scatter(p.x, p.y, marker='x', s=1, label=str(p.name))
         ax.legend()
         ax.set_aspect('equal',adjustable='datalim')
 plt.tight_layout()

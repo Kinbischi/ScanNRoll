@@ -3,15 +3,13 @@ import numpy as np
 from pathlib import Path
 import os
 import time
-from profilePointsClass import *
 
+from profilePointsClass import *
 from profileGroupClass import *
 
 
 def loadProfiles():
     path = Path(r"C:/Users/zimme/Documents/A-Phd/Rollerband/Python/ProfileData/Registration")
-
-    fileNames = os.listdir(path)
     profiles = []
 
     for file_path in path.iterdir():
