@@ -78,7 +78,6 @@ class profileData:
                 self.profilePoints[i] = False
                 self.borderPoints[i] = True
 
-    
     # weird heights? TODO: delete
     # todo return coordinates every time --> and store in self.x
     def height_from_baseline(self,x,y,m,b): # good for profiles where filament is not retractig at the baseline --> for retracting profiles: it takes lower end of filament

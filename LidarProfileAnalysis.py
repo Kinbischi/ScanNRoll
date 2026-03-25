@@ -9,39 +9,50 @@ import time
 import profileLoading
 from profilePointsClass import *
 
-
 profiles = profileLoading.loadProfiles()
 profileGroups = profileLoading.groupProfiles(profiles)
 
-#performed on every profile
+# performed on every profile
 for group in profileGroups:
     for p in group.profiles:
         p.rotate_pointcloud()
         p.translate_floor_to_zero()
         p.find_border_points()
-    group.registerProfiles()
-
+    
+    registerResult = group.registerProfiles()
+    #print(registerResult.x)
 
 fig, axes = plt.subplots(2, 2, figsize=(15.2, 7.5))
 
 for i, ax in enumerate(axes.flat):
     group = profileGroups[i]
-    for j in range(len(group.profiles)):
 
+    p = group.pOther[0]
+    shift = group.shift
+    pV= group.pV
+
+    ax.scatter(p.x, p.y, marker='x', s=1, label=str(p.name))
+    ax.scatter(p.x-shift, p.y, marker='x', s=1, label=str(p.name))
+    ax.scatter(pV.x, pV.y, marker='x', s=1, label=str(p.name))
+    #ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
+
+    """
+    for j in range(len(group.profiles)):
         p=group.profiles[j]
-        ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
+        #ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
         ax.legend()
         ax.set_aspect('equal',adjustable='datalim')
+    """
+
 plt.tight_layout()
 plt.show()
-
 
 """
 fig, axes = plt.subplots(2, 2, figsize=(15.2, 7.5))
 
 for i, ax in enumerate(axes.flat):
     group = profileGroups[0]
-    pVert =group[3]
+    pVert = group[3]
     des = np.column_stack((pVert.x, pVert.y,np.random.rand(len(pVert.x)))) #
     for j in range(len(group)-1):
         #ax.scatter(group[j].x, group[j].y, s=1)

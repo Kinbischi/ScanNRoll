@@ -1,24 +1,59 @@
 import numpy as np
+import matplotlib.pyplot as plt
 
 from profilePointsClass import *
 from scipy.spatial import cKDTree
+from scipy.spatial import KDTree
+from scipy.optimize import minimize
+
 
 class profileGroupClass:
+
     def __init__(self, profiles):
         self.profiles = profiles
-        
-    def registerProfiles(self):
-        pOther = []
+        self.pOther = []
         for p in self.profiles:
             if "vertical" not in p.name:
-                pOther.append(p)
+                self.pOther.append(p)
             else:
-                pVert = p
+                self.pV = p
+
+    def translateInX(self,xTranslation):
+        p=self.pOther[0]
+        x = p.x[p.profilePoints]
+        y = p.y[p.profilePoints]
+
+        xV = self.pV.x
+        yV= self.pV.y
         
-        pVmeanX = np.mean(pVert.x)
-        for p in pOther:
-            xMean = np.mean(p.x)
-            p.x = p.x-xMean+pVmeanX
+        xtemp=x.copy()-xTranslation
+        pointsV = np.column_stack((xV,yV))
+        points = np.column_stack((xtemp,y))
+        #points = np.array([(1, 2), (3, 4), (6, 1)])
+        tree = KDTree(pointsV)
+
+        #query = np.array([2, 3])
+        distances = np.empty(len(points))
+        for i in range(len(points)):
+            testPoint = points[i]
+            dist, idx = tree.query(testPoint)
+            nearestPoint = pointsV[idx]
+            distances[i]=dist
+        sortedDistances = np.sort(distances)
+        sortedDist = sortedDistances[:len(sortedDistances)//4]
+        partSumDist = np.sum(sortedDist)
+
+        return partSumDist
+
+    def registerProfiles(self):
+        #x0 = np.array([-1, 0.5, 0, 0.5, 1])
+        x0 = 0
+        resu = minimize(self.translateInX,x0=x0)    #args=(self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
+        self.shift = resu.x
+
+        #resu = translateInX(2,self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
+        return resu
+
 
 def estimate_normals(points):
     # simple finite-difference normals for ordered 2D profile
