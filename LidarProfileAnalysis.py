@@ -8,41 +8,48 @@ import time
 
 import profileLoading
 from profilePointsClass import *
+from profileGroupClass import *
 
 profiles = profileLoading.loadProfiles()
 profileGroups = profileLoading.groupProfiles(profiles)
 
 # performed on every profile
+allShifts = []
 for group in profileGroups:
-    for p in group.profiles:
+    for p in group:
         p.rotate_pointcloud()
         p.translate_floor_to_zero()
         p.find_border_points()
     
-    registerResult = group.registerProfiles()
+    allShifts.append(registerProfiles(group))
     #print(registerResult.x)
+
 
 fig, axes = plt.subplots(2, 2, figsize=(15.2, 7.5))
 
 for i, ax in enumerate(axes.flat):
     group = profileGroups[i]
 
-    p = group.pOther[0]
-    shift = group.shift
-    pV= group.pV
-
-    ax.scatter(p.x, p.y, marker='x', s=1, label=str(p.name))
-    ax.scatter(p.x-shift, p.y, marker='x', s=1, label=str(p.name))
-    ax.scatter(pV.x, pV.y, marker='x', s=1, label=str(p.name))
-    #ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
-
-    """
-    for j in range(len(group.profiles)):
-        p=group.profiles[j]
-        #ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
+    p= group[0]
+    ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
+    
+    for j in range(len(group)):
+        p=group[j]
+        if hasattr(p, 'shift'):
+            ax.scatter(p.x[p.profilePoints]-p.shift, p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
+        else:
+            ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
         ax.legend()
         ax.set_aspect('equal',adjustable='datalim')
-    """
+    
+
+    #ax.scatter(p.x, p.y, marker='x', s=1, label=str(p.name))
+    #ax.scatter(p.x-shift, p.y, marker='x', s=1, label=str(p.name))
+    #ax.scatter(pV.x, pV.y, marker='x', s=1, label=str(p.name))
+
+    #ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
+
+    
 
 plt.tight_layout()
 plt.show()

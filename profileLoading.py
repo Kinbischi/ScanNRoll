@@ -46,14 +46,24 @@ def groupProfiles(profiles):
         if profiles[i].profileNumber == lastNum:
             group.append(profiles[i])
             if i == len(profiles)-1:
-                g=profileGroupClass(group)
-                profileGroups.append(g)
+                profileGroups.append(group)
         else:
-            g=profileGroupClass(group)
-            profileGroups.append(g)
+            profileGroups.append(group)
             group = []
             group.append(profiles[i])
             lastNum = profiles[i].profileNumber
     
-    return profileGroups
+    sortedGroups = []
+    for g in profileGroups:
+        pOthers = []
+        for p in g:
+            if "vertical" not in p.name:
+                pOthers.append(p)
+            else:
+                pVertical = p
+        sortGroup = []
+        sortGroup.append(pVertical)
+        sortGroup.extend(pOthers)
+        sortedGroups.append(sortGroup)
+    return sortedGroups
 

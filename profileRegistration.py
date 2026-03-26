@@ -7,52 +7,44 @@ from scipy.spatial import KDTree
 from scipy.optimize import minimize
 
 
-class profileGroupClass:
+def translateInX(xTranslation,p,pVertical):
+    x = p.x[p.profilePoints]
+    y = p.y[p.profilePoints]
 
-    def __init__(self, profiles):
-        self.profiles = profiles
-        self.pOther = []
-        for p in self.profiles:
-            if "vertical" not in p.name:
-                self.pOther.append(p)
-            else:
-                self.pV = p
+    xV = pVertical.x
+    yV= pVertical.y
+    
+    xtemp=x.copy()-xTranslation
+    pointsV = np.column_stack((xV,yV))
+    points = np.column_stack((xtemp,y))
+    #points = np.array([(1, 2), (3, 4), (6, 1)])
+    tree = KDTree(pointsV)
 
-    def translateInX(self,xTranslation):
-        p=self.pOther[0]
-        x = p.x[p.profilePoints]
-        y = p.y[p.profilePoints]
+    #query = np.array([2, 3])
+    distances = np.empty(len(points))
+    for i in range(len(points)):
+        testPoint = points[i]
+        dist, idx = tree.query(testPoint)
+        nearestPoint = pointsV[idx]
+        distances[i]=dist
+    sortedDistances = np.sort(distances)
+    sortedDist = sortedDistances[:len(sortedDistances)//4]
+    partSumDist = np.sum(sortedDist)
 
-        xV = self.pV.x
-        yV= self.pV.y
-        
-        xtemp=x.copy()-xTranslation
-        pointsV = np.column_stack((xV,yV))
-        points = np.column_stack((xtemp,y))
-        #points = np.array([(1, 2), (3, 4), (6, 1)])
-        tree = KDTree(pointsV)
+    return partSumDist
 
-        #query = np.array([2, 3])
-        distances = np.empty(len(points))
-        for i in range(len(points)):
-            testPoint = points[i]
-            dist, idx = tree.query(testPoint)
-            nearestPoint = pointsV[idx]
-            distances[i]=dist
-        sortedDistances = np.sort(distances)
-        sortedDist = sortedDistances[:len(sortedDistances)//4]
-        partSumDist = np.sum(sortedDist)
-
-        return partSumDist
-
-    def registerProfiles(self):
-        #x0 = np.array([-1, 0.5, 0, 0.5, 1])
+def registerProfiles(profiles):
+    #x0 = np.array([-1, 0.5, 0, 0.5, 1])
+    shifts = []
+    pVert = profiles[0]
+    for i in range(1,len(profiles)):
         x0 = 0
-        resu = minimize(self.translateInX,x0=x0)    #args=(self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
-        self.shift = resu.x
+        resu = minimize(translateInX,x0=x0,args=(profiles[i],pVert))    #args=(self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
+        profiles[i].shift = resu.x
+        shifts.append(resu.x)
 
-        #resu = translateInX(2,self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
-        return resu
+    #resu = translateInX(2,self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
+    return shifts
 
 
 def estimate_normals(points):
