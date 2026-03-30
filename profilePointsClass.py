@@ -67,7 +67,6 @@ class profileData:
         self.x = self.x
 
     def find_border_points(self):
-        
         self.borderPoints = np.empty(len(self.x), dtype=bool)
         self.profilePoints = np.empty(len(self.y), dtype=bool)
         for i in range(len(self.y)):
@@ -77,6 +76,9 @@ class profileData:
             else:
                 self.profilePoints[i] = False
                 self.borderPoints[i] = True
+        
+
+    # function to get pts
 
     # weird heights? TODO: delete
     # todo return coordinates every time --> and store in self.x

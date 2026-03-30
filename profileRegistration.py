@@ -1,11 +1,59 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import copy
 
 from profilePointsClass import *
 from scipy.spatial import cKDTree
 from scipy.spatial import KDTree
 from scipy.optimize import minimize
 
+#TODO make a class again from this? ;)
+#detect whether left or right profile
+#define new profile as: 20% left of vertical profile is the left profile, 20% right of V is the right profile
+
+def LeftOrRightProfile(profile):
+    np.median(profile.x)
+
+def generateJoinedProfile(profiles):
+    pVert = profiles[0]
+    min = np.min(pVert.x)
+    max = np.max(pVert.x)
+    leftProfiles = []
+    rightProfiles = []
+    weirdVertProfiles = []
+
+    for i in range(1,len(profiles)):
+        p = profiles[i]
+        avg = np.mean(p.x[p.profilePoints])
+        if avg < 0.5:
+            leftProfiles.append(p)
+        if avg > 0.5:
+            rightProfiles.append(p)
+        else:
+            weirdVertProfiles.append(p)
+
+    newProfileX = np.empty(0)
+    newProfileY = np.empty(0)
+    for l in leftProfiles:
+        for i in range(len(l.x)):
+            if l.x[i] < min*0.8:
+                newProfileX = np.append(newProfileX,l.x[i])
+                newProfileY = np.append(newProfileY,l.y[i])
+    
+    newProfileX = np.append(newProfileX,pVert.x)
+    newProfileY = np.append(newProfileY,pVert.y)
+
+    for r in rightProfiles:
+        for i in range(len(r.x)):
+            if r.x[i] > max*0.8:
+                newProfileX = np.append(newProfileX,r.x[i])
+                newProfileY = np.append(newProfileY,r.y[i])
+            
+    return newProfileX,newProfileY
+
+
+
+        
 
 def translateInX(xTranslation,p,pVertical):
     x = p.x[p.profilePoints]
@@ -28,24 +76,26 @@ def translateInX(xTranslation,p,pVertical):
         nearestPoint = pointsV[idx]
         distances[i]=dist
     sortedDistances = np.sort(distances)
-    sortedDist = sortedDistances[:len(sortedDistances)//4]
+    end = len(sortedDistances)
+    part = end//5
+    sortedDist = sortedDistances[part:end]  #:len(sortedDistances)//1.1]
     partSumDist = np.sum(sortedDist)
 
     return partSumDist
 
-def registerProfiles(profiles):
-    #x0 = np.array([-1, 0.5, 0, 0.5, 1])
-    shifts = []
+def registerAndShiftProfiles(profiles):
     pVert = profiles[0]
+    pVert.shift = np.mean(pVert.x[pVert.profilePoints])
+    pVert.x = pVert.x-pVert.shift # center vertical profile points at x = 0
+    pVert = copy.deepcopy(pVert)
+    pVert.x = pVert.x[pVert.profilePoints]
+    pVert.y = pVert.y[pVert.profilePoints]
+
     for i in range(1,len(profiles)):
         x0 = 0
-        resu = minimize(translateInX,x0=x0,args=(profiles[i],pVert))    #args=(self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
+        resu = minimize(translateInX,x0=x0,args=(profiles[i],pVert))
         profiles[i].shift = resu.x
-        shifts.append(resu.x)
-
-    #resu = translateInX(2,self.pOther[0].x,self.pOther[0].y,self.pV.x,self.pV.y)
-    return shifts
-
+        profiles[i].x = profiles[i].x - profiles[i].shift
 
 def estimate_normals(points):
     # simple finite-difference normals for ordered 2D profile

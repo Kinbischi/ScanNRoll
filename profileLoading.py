@@ -5,8 +5,36 @@ import os
 import time
 
 from profilePointsClass import *
-from profileGroupClass import *
+from profileRegistration import *
 
+def plotProfiles(profileGroups, noFloorPoints = False, withShift = False):
+    fig, axes = plt.subplots(2, 3, figsize=(15.2, 7.5))
+
+    for i, ax in enumerate(axes.flat):
+        if i >= len(profileGroups):
+            break
+        group = profileGroups[i]
+
+        #ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
+        #ax.scatter(p.x, p.y, marker='x', s=1, label=str(p.name))
+        
+
+        for j in range(len(group)):
+            p=group[j]
+            if noFloorPoints:
+                x = p.x[p.profilePoints].copy()
+                y = p.y[p.profilePoints].copy()
+            else:
+                x = p.x.copy()
+                y = p.y.copy()
+
+            if withShift & hasattr(p, 'shift'):
+                x=x-p.shift
+            ax.scatter(x, y, marker='x', s=1, label=str(p.name))
+
+            ax.legend()
+            ax.set_aspect('equal',adjustable='datalim')
+    plt.tight_layout()
 
 def loadProfiles():
     path = Path(r"C:/Users/zimme/Documents/A-Phd/Rollerband/Python/ProfileData/Registration")

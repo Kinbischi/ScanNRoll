@@ -8,51 +8,41 @@ import time
 
 import profileLoading
 from profilePointsClass import *
-from profileGroupClass import *
+from profileRegistration import *
 
 profiles = profileLoading.loadProfiles()
 profileGroups = profileLoading.groupProfiles(profiles)
 
 # performed on every profile
 allShifts = []
+newX = []
+newY = []
 for group in profileGroups:
     for p in group:
         p.rotate_pointcloud()
         p.translate_floor_to_zero()
         p.find_border_points()
     
-    allShifts.append(registerProfiles(group))
+    registerAndShiftProfiles(group)
+    nX,nY = generateJoinedProfile(group)
+    newX.append(nX)
+    newY.append(nY)
     #print(registerResult.x)
-
-
-fig, axes = plt.subplots(2, 2, figsize=(15.2, 7.5))
-
-for i, ax in enumerate(axes.flat):
-    group = profileGroups[i]
-
-    p= group[0]
-    ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
-    
-    for j in range(len(group)):
-        p=group[j]
-        if hasattr(p, 'shift'):
-            ax.scatter(p.x[p.profilePoints]-p.shift, p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
-        else:
-            ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
-        ax.legend()
-        ax.set_aspect('equal',adjustable='datalim')
-    
-
-    #ax.scatter(p.x, p.y, marker='x', s=1, label=str(p.name))
-    #ax.scatter(p.x-shift, p.y, marker='x', s=1, label=str(p.name))
-    #ax.scatter(pV.x, pV.y, marker='x', s=1, label=str(p.name))
-
-    #ax.scatter(p.x[p.profilePoints], p.y[p.profilePoints], marker='x', s=1, label=str(p.name))
-
-    
-
-plt.tight_layout()
+for i in range(len(newX)):
+    plt.plot(newX[i],newY[i])
+#profileLoading.plotProfiles(profileGroups)
+#profileLoading.plotProfiles(profileGroups, noFloorPoints=True)
+#profileLoading.plotProfiles(profileGroups, withShift=True)
+#profileLoading.plotProfiles(profileGroups, noFloorPoints=True, withShift=True)
 plt.show()
+
+# TODO:
+# think of whether profileGroups should be class with obj joined profile
+# what obj belongs to groups what to profile
+# what do you need in terms of workflow? 
+# can profiles remain shifted --> yes, can we discard floor points -->?
+# you will anyways only use joinedprofile
+
 
 """
 fig, axes = plt.subplots(2, 2, figsize=(15.2, 7.5))
