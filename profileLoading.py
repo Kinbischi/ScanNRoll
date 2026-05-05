@@ -3,9 +3,37 @@ import numpy as np
 from pathlib import Path
 import os
 import time
+import h5py
 
 from profilePointsClass import *
 from profileRegistration import *
+
+
+def load_hdf5_profiles(fileName):
+    with h5py.File(fileName, "r") as f:
+        profile_names = [name for name in f.keys() if name.startswith("profile_")]
+        profile_names.sort()  # Sort by name, assuming sequential
+        
+        print(f"Found {len(profile_names)} profiles")
+        
+        # Read all profiles first
+        profiles_data = []
+        for profile_name in profile_names:
+            group = f[profile_name]
+            if "x" in group and "z" in group:
+                x = group["x"][:].astype(float)
+                z = group["z"][:].astype(float)
+                # Create 3D points: x, 0, z
+                points_3d = np.column_stack((x, z, np.zeros_like(x)))
+                # points_3d = np.column_stack((x, np.zeros(len(x), dtype=float), z))
+                
+                profiles_data.append(points_3d)
+        
+        print(f"Loaded {len(profiles_data)} profiles with data")
+        return profiles_data
+
+
+
 
 def plotProfiles(profileGroups, noFloorPoints = True):
     fig, axes = plt.subplots(2, 3, figsize=(15.2, 7.5))
