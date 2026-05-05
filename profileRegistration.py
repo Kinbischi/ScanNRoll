@@ -11,53 +11,61 @@ from scipy.optimize import minimize
 #detect whether left or right profile
 #define new profile as: 20% left of vertical profile is the left profile, 20% right of V is the right profile
 
-def LeftOrRightProfile(profile):
-    np.median(profile.x)
-
-def generateJoinedProfile(profiles):
+def find_left_right_center_profile(profiles):
     pVert = profiles[0]
-    min = np.min(pVert.x)
-    max = np.max(pVert.x)
     leftProfiles = []
     rightProfiles = []
     weirdVertProfiles = []
 
     for i in range(1,len(profiles)):
         p = profiles[i]
-        avg = np.mean(p.x[p.profilePoints])
+        avg = np.mean(p.x)
         if avg < 0.5:
             leftProfiles.append(p)
-        if avg > 0.5:
+        elif avg > 0.5:
             rightProfiles.append(p)
         else:
             weirdVertProfiles.append(p)
+        
+    if len(leftProfiles) > 0:
+         left = leftProfiles[0]
+    else:
+        left = pVert
+    if len(rightProfiles) > 0:
+        right = rightProfiles[0]
+    else:
+        right = pVert
+    return pVert, left,right
+
+def generateJoinedProfile(profiles):
+    pVert, pL, pR = find_left_right_center_profile(profiles)
+    min = np.min(pVert.x)
+    max = np.max(pVert.x)
 
     newProfileX = np.empty(0)
     newProfileY = np.empty(0)
-    for l in leftProfiles:
-        for i in range(len(l.x)):
-            if l.x[i] < min*0.8:
-                newProfileX = np.append(newProfileX,l.x[i])
-                newProfileY = np.append(newProfileY,l.y[i])
     
-    newProfileX = np.append(newProfileX,pVert.x)
-    newProfileY = np.append(newProfileY,pVert.y)
+    #TODO: make so that "all points" from left side get attached? --> currently only works if less then 20% "going in" at bottom
+    for i in range(len(pL.x)):
+        if pL.x[i] < min*0.8:
+            newProfileX = np.append(newProfileX,pL.x[i])
+            newProfileY = np.append(newProfileY,pL.y[i])
+    
+    for i in range(len(pVert.x)):
+        if (pVert.x[i] > min*0.8) & (pVert.x[i] < max*0.8):
+            newProfileX = np.append(newProfileX,pVert.x[i])
+            newProfileY = np.append(newProfileY,pVert.y[i])
 
-    for r in rightProfiles:
-        for i in range(len(r.x)):
-            if r.x[i] > max*0.8:
-                newProfileX = np.append(newProfileX,r.x[i])
-                newProfileY = np.append(newProfileY,r.y[i])
+    for i in range(len(pR.x)):
+        if pR.x[i] > max*0.8:
+            newProfileX = np.append(newProfileX,pR.x[i])
+            newProfileY = np.append(newProfileY,pR.y[i])
             
-    return newProfileX,newProfileY
-
-
-
-        
-
+    return newProfileX,newProfileY, profileData("Franz",newProfileX,newProfileY)
+    
 def translateInX(xTranslation,p,pVertical):
-    x = p.x[p.profilePoints]
-    y = p.y[p.profilePoints]
+    x = p.x
+    y = p.y
 
     xV = pVertical.x
     yV= pVertical.y
@@ -85,17 +93,15 @@ def translateInX(xTranslation,p,pVertical):
 
 def registerAndShiftProfiles(profiles):
     pVert = profiles[0]
-    pVert.shift = np.mean(pVert.x[pVert.profilePoints])
+    pVert.shift = np.mean(pVert.x)
     pVert.x = pVert.x-pVert.shift # center vertical profile points at x = 0
-    pVert = copy.deepcopy(pVert)
-    pVert.x = pVert.x[pVert.profilePoints]
-    pVert.y = pVert.y[pVert.profilePoints]
-
+    pVert.borderPoints[0,:] = pVert.borderPoints[0,:] - pVert.shift
     for i in range(1,len(profiles)):
         x0 = 0
         resu = minimize(translateInX,x0=x0,args=(profiles[i],pVert))
         profiles[i].shift = resu.x
         profiles[i].x = profiles[i].x - profiles[i].shift
+        profiles[i].borderPoints[0,:] = profiles[i].borderPoints[0,:] - profiles[i].shift
 
 def estimate_normals(points):
     # simple finite-difference normals for ordered 2D profile

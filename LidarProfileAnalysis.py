@@ -17,6 +17,7 @@ profileGroups = profileLoading.groupProfiles(profiles)
 allShifts = []
 newX = []
 newY = []
+joinedProfiles = []
 for group in profileGroups:
     for p in group:
         p.rotate_pointcloud()
@@ -24,17 +25,22 @@ for group in profileGroups:
         p.find_border_points()
     
     registerAndShiftProfiles(group)
-    nX,nY = generateJoinedProfile(group)
+    nX,nY,pTesting = generateJoinedProfile(group)
+    joinedProfiles.append(pTesting)
     newX.append(nX)
     newY.append(nY)
-    #print(registerResult.x)
+
+"""
+# TODO:
+# make sure that points are sorted (along profile line) for area algo
 for i in range(len(newX)):
-    plt.plot(newX[i],newY[i])
-#profileLoading.plotProfiles(profileGroups)
-#profileLoading.plotProfiles(profileGroups, noFloorPoints=True)
-#profileLoading.plotProfiles(profileGroups, withShift=True)
-#profileLoading.plotProfiles(profileGroups, noFloorPoints=True, withShift=True)
+    #plt.plot(newX[i],newY[i])
+    plt.scatter(newX[i], newY[i], marker='x', s=1, label=str(p.name))
+profileLoading.plotProfiles(profileGroups)
+#profileLoading.plotProfiles(profileGroups, noFloorPoints=False)
 plt.show()
+"""
+
 
 # TODO:
 # think of whether profileGroups should be class with obj joined profile
@@ -42,6 +48,44 @@ plt.show()
 # what do you need in terms of workflow? 
 # can profiles remain shifted --> yes, can we discard floor points -->?
 # you will anyways only use joinedprofile
+
+areaI =[]
+areaI2 =[]
+area1 = []
+area2 = []
+for group in profileGroups:
+    areaI.append(group[0].integrate_area())
+
+for j in joinedProfiles:
+    areaI2.append(j.integrate_area())
+    a1,a2 = j.shoelace_area()
+    area1.append(a1)
+    area2.append(a2)
+
+testP = joinedProfiles[0] #profiles[0]
+
+plt.ion()  # Turn on interactive mode
+fig, ax = plt.subplots()
+
+x_data = []
+y_data = []
+
+for x, y in zip(testP.x, testP.y):
+    x_data.append(x)
+    y_data.append(y)
+    
+    ax.clear()  # Clear previous frame
+    ax.plot(x_data, y_data, marker='x')
+    
+    ax.set_xlim(-40,40)
+    ax.set_ylim(-10, 40)
+    ax.set_title("Points appearing one by one")
+    
+    plt.draw()
+    plt.pause(0.05)  # Pause to create animation effect
+
+plt.ioff()
+plt.show()
 
 
 """

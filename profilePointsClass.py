@@ -67,49 +67,61 @@ class profileData:
         self.x = self.x
 
     def find_border_points(self):
-        self.borderPoints = np.empty(len(self.x), dtype=bool)
-        self.profilePoints = np.empty(len(self.y), dtype=bool)
+        borderPoints = np.empty(len(self.x), dtype=bool)
+        profilePoints = np.empty(len(self.y), dtype=bool)
         for i in range(len(self.y)):
             if self.y[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
-                self.profilePoints[i] = True
-                self.borderPoints[i] = False
+                profilePoints[i] = True
+                borderPoints[i] = False
             else:
-                self.profilePoints[i] = False
-                self.borderPoints[i] = True
-        
+                profilePoints[i] = False
+                borderPoints[i] = True
+        self.borderPoints = np.array([self.x[borderPoints],self.y[borderPoints]])
+        self.x = self.x[profilePoints]
+        self.y = self.y[profilePoints]
 
-    # function to get pts
+    def find_smooth_slope(self):
+        self.ySlope = abs(np.gradient(self.y,self.x))
 
-    # weird heights? TODO: delete
-    # todo return coordinates every time --> and store in self.x
-    def height_from_baseline(self,x,y,m,b): # good for profiles where filament is not retractig at the baseline --> for retracting profiles: it takes lower end of filament
-        self.heights = -(m * x - y + b) / np.sqrt(m**2 + 1)
-        
+        ySmooth = moving_average(self.y,15)
+        ySmooth = moving_average(ySmooth,9)
+        ySmooth = moving_average(ySmooth,5)
+        ySmooth = moving_average(ySmooth,5)
+        self.ySmooth = ySmooth
 
-    def slope_from_height(self):
-        self.gradients = abs(np.gradient(self.heights,self.x))
-        self.smoothedHeight = moving_average(self.heights,15)
-        self.smoothedHeight = moving_average(self.smoothedHeight,9)
-        self.smoothedHeight = moving_average(self.smoothedHeight,5)
-        self.smoothedHeight = moving_average(self.smoothedHeight,5)
-        self.smoothedGradients = abs(np.gradient(self.smoothedHeight,self.x))
-        self.smoothedGradients = moving_average(self.smoothedGradients,65)
-        self.smoothedGradients = moving_average(self.smoothedGradients,55)
-        self.smoothedGradients = moving_average(self.smoothedGradients,15)
-        self.smoothedGradients = moving_average(self.smoothedGradients,5)
+        ySlopeSmooth = abs(np.gradient(ySmooth,self.x))
+        ySlopeSmooth = moving_average(ySlopeSmooth,65)
+        ySlopeSmooth = moving_average(ySlopeSmooth,55)
+        ySlopeSmooth = moving_average(ySlopeSmooth,15)
+        ySlopeSmooth = moving_average(ySlopeSmooth,5)
+        self.ySlopeSmooth = ySlopeSmooth
 
     def width_from_smoothed_slope(self):
-        self.peaks, properties = sp.signal.find_peaks(self.smoothedGradients,height=0.15,distance=50)
+        self.peaks, properties = sp.signal.find_peaks(self.ySlopeSmooth,height=0.15,distance=50)
         if len(self.peaks) != 2:
             self.width = np.nan
         else:
             self.width = np.round(abs(self.x[self.peaks[0]]-self.x[self.peaks[1]]), decimals=2)
 
+    # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")
     def integrate_area(self):
-        self.area=np.round(sp.integrate.simpson(self.heights,self.x), decimals=2)
+        area=np.round(sp.integrate.simpson(self.y,self.x), decimals=2)
+        return area
+    
+    
+    # Area using shoelace formula --> (points must be ordered!, points do not need to be monotonically increasing in x)
+    def shoelace_area(self):
+        # chat gpt code
+        shoelaceArea = 0.5 * abs(np.dot(self.x, np.roll(self.y, 1)) - np.dot(self.y, np.roll(self.x, 1)))
+
+        points= np.vstack((self.x,self.y))
+        shifted = np.vstack((points[1:], points[0]))
+        cross = points[:, 0] * shifted[:, 1] - shifted[:, 0] * points[:, 1]
+        shoelaceArea2 = 0.5 * abs(np.sum(cross))
+        return shoelaceArea,shoelaceArea2
 
     def find_max_height(self):
-        self.maxSmoothedHeight = np.round(np.max(self.smoothedHeight),decimals=2)
-        self.maxSmoothedPlace = np.argmax(self.smoothedHeight)
-        self.maxHeight = np.round(np.max(self.heights),decimals=2)
-        self.maxPlace = np.argmax(self.heights)
+        self.maxSmoothedHeight = np.round(np.max(self.ySmooth),decimals=2)
+        self.maxSmoothedPlace = np.argmax(self.ySmooth)
+        self.maxHeight = np.round(np.max(self.y),decimals=2)
+        self.maxPlace = np.argmax(self.y)
