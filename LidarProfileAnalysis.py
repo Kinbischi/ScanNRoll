@@ -14,6 +14,11 @@ from profileRegistration import *
 HDF5_FILE = "HDf5data/TestExperiments/udp_profiles_772profiles_same.h5"
 profiles = profileLoading.load_hdf5_profiles(HDF5_FILE)
 
+for p in profiles:
+        p.rotate_pointcloud()
+        p.translate_floor_to_zero()
+        p.find_border_points()
+
 plottingProfiles3D.plot_3d_profiles(profiles)
 
 

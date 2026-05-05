@@ -24,10 +24,9 @@ def load_hdf5_profiles(fileName):
                 x = group["x"][:].astype(float)
                 z = group["z"][:].astype(float)
                 # Create 3D points: x, 0, z
-                points_3d = np.column_stack((x, z, np.zeros_like(x)))
-                # points_3d = np.column_stack((x, np.zeros(len(x), dtype=float), z))
-                
-                profiles_data.append(points_3d)
+                # points_3d = np.column_stack((x, z, np.zeros_like(x)))
+                prof = profileData(profile_name, x, z)
+                profiles_data.append(prof)
         
         print(f"Loaded {len(profiles_data)} profiles with data")
         return profiles_data

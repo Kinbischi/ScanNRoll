@@ -1,7 +1,7 @@
 import h5py
 import numpy as np
 import pyvista as pv
-
+from profilePointsClass import *
 
 """
 # artificial profile
@@ -20,7 +20,7 @@ points_3d = np.column_stack((x, y, np.zeros_like(x)))
 
 """
 
-def plot_3d_profiles(profiles):
+def plot_3d_profiles(profiles: list[profileData]):
     distances = np.ones(len(profiles)) * 2000  # 2.0 units between each profile
     #distances = np.tile(np.array([1,3]),300) # distances to NEXT profile
     totalDistances = np.cumsum(distances)
@@ -45,7 +45,8 @@ def plot_3d_profiles(profiles):
 
     #TODO: check how the real profiles are set (do they need to be inverted 180 deg?)
     for i in range(n_profiles):
-        prof = profiles[i]
+        profile = profiles[i]
+        prof = np.column_stack((profile.x, profile.z, np.zeros_like(profile.x)))
         
         if movingStraight:
             addedStraightDist = addedStraightDist + distances[i]

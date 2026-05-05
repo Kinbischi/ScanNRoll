@@ -2,6 +2,8 @@ import numpy as np
 import scipy as sp
 from sklearn.neighbors import NearestNeighbors
 import re
+from dataclasses import dataclass
+from typing import Optional
 
 def moving_average(arr, window_size):
     kernel = np.ones(window_size) / window_size
@@ -36,18 +38,35 @@ def get_baseline_from_profileBorder(x ,y, borderPoints=30):
         return m,b
 
 
+@dataclass
 class profileData:
-    
-    def __init__(self,name,Xcord,Ycord,):
-        self.name=name
-        self.x=Xcord
-        self.y=Ycord
-        profileNumberMatch = re.search(r"Profile(\d{1})", name)
+    name: str
+    x: np.ndarray
+    z: np.ndarray
+    profileNumber: Optional[int] = None
+    borderPoints: Optional[np.ndarray] = None
+    ySlope: Optional[np.ndarray] = None
+    ySmooth: Optional[np.ndarray] = None
+    ySlopeSmooth: Optional[np.ndarray] = None
+    peaks: Optional[np.ndarray] = None
+    width: Optional[float] = None
+    area: Optional[float] = None
+    shoelaceArea: Optional[float] = None
+    shoelaceArea2: Optional[float] = None
+    maxSmoothedHeight: Optional[float] = None
+    maxSmoothedPlace: Optional[int] = None
+    maxHeight: Optional[float] = None
+    maxPlace: Optional[int] = None
+
+    #TODO: never called!
+    def __post_init__(self):
+        profileNumberMatch = re.search(r"Profile(\d{1})", self.name)
         if profileNumberMatch:
             self.profileNumber = int(profileNumberMatch.group(1))
-
+ 
+    
     def rotate_pointcloud(self):
-        m,b = get_baseline_from_profileBorder(self.x,self.y)
+        m,b = get_baseline_from_profileBorder(self.x,self.z)
 
         angle_deg = np.arctan(m)*180/np.pi
 
@@ -56,30 +75,30 @@ class profileData:
             [np.cos(angle_rad), -np.sin(angle_rad)],
             [np.sin(angle_rad),  np.cos(angle_rad)]
         ])
-        points =np.column_stack((self.x, self.y))
+        points =np.column_stack((self.x, self.z))
         rotatedPoints = points @ R.T
         self.x = rotatedPoints[:,0]
-        self.y = rotatedPoints[:,1]
+        self.z = rotatedPoints[:,1]
 
     def translate_floor_to_zero(self):
-        m,b = get_baseline_from_profileBorder(self.x,self.y)
-        self.y = self.y-b
+        m,b = get_baseline_from_profileBorder(self.x,self.z)
+        self.z = self.z-b
         self.x = self.x
 
     def find_border_points(self):
         borderPoints = np.empty(len(self.x), dtype=bool)
-        profilePoints = np.empty(len(self.y), dtype=bool)
-        for i in range(len(self.y)):
-            if self.y[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
+        profilePoints = np.empty(len(self.z), dtype=bool)
+        for i in range(len(self.z)):
+            if self.z[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
                 profilePoints[i] = True
                 borderPoints[i] = False
             else:
                 profilePoints[i] = False
                 borderPoints[i] = True
-        self.borderPoints = np.array([self.x[borderPoints],self.y[borderPoints]])
+        self.borderPoints = np.array([self.x[borderPoints],self.z[borderPoints]])
         self.x = self.x[profilePoints]
-        self.y = self.y[profilePoints]
-
+        self.z = self.z[profilePoints]
+"""
     def find_smooth_slope(self):
         self.ySlope = abs(np.gradient(self.y,self.x))
 
@@ -125,3 +144,4 @@ class profileData:
         self.maxSmoothedPlace = np.argmax(self.ySmooth)
         self.maxHeight = np.round(np.max(self.y),decimals=2)
         self.maxPlace = np.argmax(self.y)
+    """
