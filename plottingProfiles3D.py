@@ -20,34 +20,61 @@ points_3d = np.column_stack((x, y, np.zeros_like(x)))
 
 """
 
-def plot_3d_profiles(profiles: list[profileData]):
-    distances = np.ones(len(profiles)) * 2000  # 2.0 units between each profile
-    #distances = np.tile(np.array([1,3]),300) # distances to NEXT profile
-    totalDistances = np.cumsum(distances)
-    n_profiles = len(distances)
-    #profiles = np.stack([points_3d] * n_profiles)
+def get_profile_points_for_plot(profiles: list[profileData]):
+    
+    profile_points = []
+    for i in range(len(profiles)):
+        profile = profiles[i]
+        prof = np.column_stack((profile.x, profile.z, np.zeros_like(profile.x)))
+        profile_points.append(prof)
+    return profile_points
+    #return [np.column_stack((profile.x, profile.z, np.zeros_like(profile.x))) for profile in profiles]
 
+def add_3d_points_to_plot(points, plotter, colour = 'green'):
+    distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
+    #totalDistances = np.cumsum(distances)
+
+    pathPoints,tiltAngles = compute_print_path_and_angle(distances)
+    
+    #TODO: check how the real profiles are set (do they need to be inverted 180 deg?)
+    for i in range(len(points)):
+        prof = points[i]
+        # rotate profile to match path direction
+        rot_matrix = np.array([
+        [np.cos(tiltAngles[i]), 0, np.sin(tiltAngles[i])],
+        [0, 1, 0],
+        [-np.sin(tiltAngles[i]), 0, np.cos(tiltAngles[i])]
+        ])
+        prof = prof @ rot_matrix.T
+        
+        if prof.shape[0] > 0:
+            cloud = pv.PolyData(pathPoints[i]+prof)
+            plotter.add_points(cloud, color = colour, point_size=5, render_points_as_spheres=True) # size was 5
+            #plotter.add_points(cloud.points[0], point_size=6, render_points_as_spheres=True,color='red') # size was 5
+        
+    return plotter
+
+
+def compute_print_path_and_angle(distances):
+    
     # path parameters
     path_radius = 5000.0 # radius of the curved sweep in XY plane
     totalCurveDist = path_radius * np.pi
     totalStraightDist = 80000
 
     #initializations
-    cx=cy=cz=0
+    cx=cz=0
     transitionPoint = np.array([0,0,0])
     currentPoint = np.array([0,0,0])
     addedStraightDist = 0
     addedAngledDist = 0
     zDir = 1
     movingStraight = True
+    
+    pathpoints=[]
+    tiltAngles=[]
 
-    plotter = pv.Plotter()
-
-    #TODO: check how the real profiles are set (do they need to be inverted 180 deg?)
-    for i in range(n_profiles):
-        profile = profiles[i]
-        prof = np.column_stack((profile.x, profile.z, np.zeros_like(profile.x)))
-        
+    for i in range(len(distances)):
         if movingStraight:
             addedStraightDist = addedStraightDist + distances[i]
             if addedStraightDist < totalStraightDist: # straight path points
@@ -86,16 +113,8 @@ def plot_3d_profiles(profiles: list[profileData]):
                 alpha = -zDir*phi
             else: # curved path, anti-clockwise
                 alpha = np.pi-zDir*phi
-
-        # rotate profile to match path direction
-        rot_matrix = np.array([
-        [np.cos(alpha), 0, np.sin(alpha)],
-        [0, 1, 0],
-        [-np.sin(alpha), 0, np.cos(alpha)]
-        ])
-        prof = prof @ rot_matrix.T
-
-        cloud = pv.PolyData(currentPoint+prof)
-        plotter.add_points(cloud, point_size=5, render_points_as_spheres=True) # size was 5
         
-    plotter.show()
+        pathpoints.append(currentPoint)
+        tiltAngles.append(alpha)
+    return pathpoints, tiltAngles
+    

@@ -5,6 +5,127 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+
+@dataclass
+class profileData:
+    name: str
+    x: np.ndarray
+    z: np.ndarray
+
+    # currently unused
+    m: Optional[float] = None
+    b: Optional[float] = None
+
+    profileNumber: Optional[int] = None
+    borderPoints: Optional[np.ndarray] = None
+    ySlope: Optional[np.ndarray] = None
+    ySmooth: Optional[np.ndarray] = None
+    ySlopeSmooth: Optional[np.ndarray] = None
+    peaks: Optional[np.ndarray] = None
+    width: Optional[float] = None
+    area: Optional[float] = None
+    shoelaceArea: Optional[float] = None
+    shoelaceArea2: Optional[float] = None
+    maxSmoothedHeight: Optional[float] = None
+    maxSmoothedPlace: Optional[int] = None
+    maxHeight: Optional[float] = None
+    maxPlace: Optional[int] = None
+
+    #TODO: profileNumber not correctly taken 
+    def __post_init__(self):
+        profileNumberMatch = re.search(r"profile_(\d{1})", self.name)
+        if profileNumberMatch:
+            self.profileNumber = int(profileNumberMatch.group(1))
+    
+    
+
+    def find_smooth_slope(self):
+        self.ySlope = abs(np.gradient(self.z,self.x))
+
+        ySmooth = moving_average(self.z,15)
+        ySmooth = moving_average(ySmooth,9)
+        ySmooth = moving_average(ySmooth,5)
+        ySmooth = moving_average(ySmooth,5)
+        self.ySmooth = ySmooth
+
+        ySlopeSmooth = abs(np.gradient(ySmooth,self.x))
+        ySlopeSmooth = moving_average(ySlopeSmooth,65)
+        ySlopeSmooth = moving_average(ySlopeSmooth,55)
+        ySlopeSmooth = moving_average(ySlopeSmooth,15)
+        ySlopeSmooth = moving_average(ySlopeSmooth,5)
+        self.ySlopeSmooth = ySlopeSmooth
+
+    def width_from_smoothed_slope(self):
+        self.peaks, properties = sp.signal.find_peaks(self.ySlopeSmooth,height=0.15,distance=50)
+        if len(self.peaks) != 2:
+            self.width = np.nan
+        else:
+            self.width = np.round(abs(self.x[self.peaks[0]]-self.x[self.peaks[1]]), decimals=2)
+    """
+    # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")
+    def integrate_area(self):
+        area=np.round(sp.integrate.simpson(self.y,self.x), decimals=2)
+        return area
+    
+    
+    # Area using shoelace formula --> (points must be ordered!, points do not need to be monotonically increasing in x)
+    def shoelace_area(self):
+        # chat gpt code
+        shoelaceArea = 0.5 * abs(np.dot(self.x, np.roll(self.y, 1)) - np.dot(self.y, np.roll(self.x, 1)))
+
+        points= np.vstack((self.x,self.y))
+        shifted = np.vstack((points[1:], points[0]))
+        cross = points[:, 0] * shifted[:, 1] - shifted[:, 0] * points[:, 1]
+        shoelaceArea2 = 0.5 * abs(np.sum(cross))
+        return shoelaceArea,shoelaceArea2
+
+    def find_max_height(self):
+        self.maxSmoothedHeight = np.round(np.max(self.ySmooth),decimals=2)
+        self.maxSmoothedPlace = np.argmax(self.ySmooth)
+        self.maxHeight = np.round(np.max(self.y),decimals=2)
+        self.maxPlace = np.argmax(self.y)
+    """
+
+
+
+def translate_floor_to_zero(profiles: list[profileData]):
+        for p in profiles:
+            m,b = get_baseline_from_profileBorder(p.x,p.z)
+            p.z = p.z-b
+            p.x = p.x
+        return profiles
+
+def rotate_pointcloud(profiles: list[profileData]):
+        for p in profiles:
+            m,b = get_baseline_from_profileBorder(p.x,p.z)
+
+            angle_deg = np.arctan(m)*180/np.pi
+
+            angle_rad = -np.pi/180 * angle_deg
+            R = np.array([
+                [np.cos(angle_rad), -np.sin(angle_rad)],
+                [np.sin(angle_rad),  np.cos(angle_rad)]
+            ])
+            points =np.column_stack((p.x, p.z))
+            rotatedPoints = points @ R.T
+            p.x = rotatedPoints[:,0]
+            p.z = rotatedPoints[:,1]
+
+def find_border_points(profiles: list[profileData]):
+    for p in profiles:
+        borderPoints = np.empty(len(p.x), dtype=bool)
+        profilePoints = np.empty(len(p.z), dtype=bool)
+        for i in range(len(p.z)):
+            if p.z[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
+                profilePoints[i] = True
+                borderPoints[i] = False
+            else:
+                profilePoints[i] = False
+                borderPoints[i] = True
+        p.borderPoints = np.array([p.x[borderPoints],p.z[borderPoints]])
+        p.x = p.x[profilePoints]
+        p.z = p.z[profilePoints]
+
 def moving_average(arr, window_size):
     kernel = np.ones(window_size) / window_size
     return np.convolve(arr, kernel, mode='same')
@@ -36,112 +157,3 @@ def get_baseline_from_profileBorder(x ,y, borderPoints=30):
                 m=coeffs1[0]
                 b=coeffs1[1]
         return m,b
-
-
-@dataclass
-class profileData:
-    name: str
-    x: np.ndarray
-    z: np.ndarray
-    profileNumber: Optional[int] = None
-    borderPoints: Optional[np.ndarray] = None
-    ySlope: Optional[np.ndarray] = None
-    ySmooth: Optional[np.ndarray] = None
-    ySlopeSmooth: Optional[np.ndarray] = None
-    peaks: Optional[np.ndarray] = None
-    width: Optional[float] = None
-    area: Optional[float] = None
-    shoelaceArea: Optional[float] = None
-    shoelaceArea2: Optional[float] = None
-    maxSmoothedHeight: Optional[float] = None
-    maxSmoothedPlace: Optional[int] = None
-    maxHeight: Optional[float] = None
-    maxPlace: Optional[int] = None
-
-    #TODO: never called!
-    def __post_init__(self):
-        profileNumberMatch = re.search(r"Profile(\d{1})", self.name)
-        if profileNumberMatch:
-            self.profileNumber = int(profileNumberMatch.group(1))
- 
-    
-    def rotate_pointcloud(self):
-        m,b = get_baseline_from_profileBorder(self.x,self.z)
-
-        angle_deg = np.arctan(m)*180/np.pi
-
-        angle_rad = -np.pi/180 * angle_deg
-        R = np.array([
-            [np.cos(angle_rad), -np.sin(angle_rad)],
-            [np.sin(angle_rad),  np.cos(angle_rad)]
-        ])
-        points =np.column_stack((self.x, self.z))
-        rotatedPoints = points @ R.T
-        self.x = rotatedPoints[:,0]
-        self.z = rotatedPoints[:,1]
-
-    def translate_floor_to_zero(self):
-        m,b = get_baseline_from_profileBorder(self.x,self.z)
-        self.z = self.z-b
-        self.x = self.x
-
-    def find_border_points(self):
-        borderPoints = np.empty(len(self.x), dtype=bool)
-        profilePoints = np.empty(len(self.z), dtype=bool)
-        for i in range(len(self.z)):
-            if self.z[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
-                profilePoints[i] = True
-                borderPoints[i] = False
-            else:
-                profilePoints[i] = False
-                borderPoints[i] = True
-        self.borderPoints = np.array([self.x[borderPoints],self.z[borderPoints]])
-        self.x = self.x[profilePoints]
-        self.z = self.z[profilePoints]
-"""
-    def find_smooth_slope(self):
-        self.ySlope = abs(np.gradient(self.y,self.x))
-
-        ySmooth = moving_average(self.y,15)
-        ySmooth = moving_average(ySmooth,9)
-        ySmooth = moving_average(ySmooth,5)
-        ySmooth = moving_average(ySmooth,5)
-        self.ySmooth = ySmooth
-
-        ySlopeSmooth = abs(np.gradient(ySmooth,self.x))
-        ySlopeSmooth = moving_average(ySlopeSmooth,65)
-        ySlopeSmooth = moving_average(ySlopeSmooth,55)
-        ySlopeSmooth = moving_average(ySlopeSmooth,15)
-        ySlopeSmooth = moving_average(ySlopeSmooth,5)
-        self.ySlopeSmooth = ySlopeSmooth
-
-    def width_from_smoothed_slope(self):
-        self.peaks, properties = sp.signal.find_peaks(self.ySlopeSmooth,height=0.15,distance=50)
-        if len(self.peaks) != 2:
-            self.width = np.nan
-        else:
-            self.width = np.round(abs(self.x[self.peaks[0]]-self.x[self.peaks[1]]), decimals=2)
-
-    # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")
-    def integrate_area(self):
-        area=np.round(sp.integrate.simpson(self.y,self.x), decimals=2)
-        return area
-    
-    
-    # Area using shoelace formula --> (points must be ordered!, points do not need to be monotonically increasing in x)
-    def shoelace_area(self):
-        # chat gpt code
-        shoelaceArea = 0.5 * abs(np.dot(self.x, np.roll(self.y, 1)) - np.dot(self.y, np.roll(self.x, 1)))
-
-        points= np.vstack((self.x,self.y))
-        shifted = np.vstack((points[1:], points[0]))
-        cross = points[:, 0] * shifted[:, 1] - shifted[:, 0] * points[:, 1]
-        shoelaceArea2 = 0.5 * abs(np.sum(cross))
-        return shoelaceArea,shoelaceArea2
-
-    def find_max_height(self):
-        self.maxSmoothedHeight = np.round(np.max(self.ySmooth),decimals=2)
-        self.maxSmoothedPlace = np.argmax(self.ySmooth)
-        self.maxHeight = np.round(np.max(self.y),decimals=2)
-        self.maxPlace = np.argmax(self.y)
-    """

@@ -3,6 +3,7 @@ import numpy as np
 from pathlib import Path
 import os
 import time
+import pyvista as pv
 
 #from point_cloud_registration import ICP, PlaneICP, NDT, VPlaneICP
 
@@ -14,13 +15,19 @@ from profileRegistration import *
 HDF5_FILE = "HDf5data/TestExperiments/udp_profiles_772profiles_same.h5"
 profiles = profileLoading.load_hdf5_profiles(HDF5_FILE)
 
-for p in profiles:
-        p.rotate_pointcloud()
-        p.translate_floor_to_zero()
-        p.find_border_points()
+plotter = pv.Plotter()
 
-plottingProfiles3D.plot_3d_profiles(profiles)
+plotter = plottingProfiles3D.add_3d_points_to_plot(plottingProfiles3D.get_profile_points_for_plot(profiles), plotter, 'blue')
+rotate_pointcloud(profiles)
+#translate_floor_to_zero(profiles)
 
+#find_border_points(profiles)
+        #p.find_smooth_slope()
+        #p.width_from_smoothed_slope()
+plotter = plottingProfiles3D.add_3d_points_to_plot(plottingProfiles3D.get_profile_points_for_plot(profiles), plotter, 'green')
+
+plotter.add_camera_orientation_widget()
+plotter.show()
 
 """
 #profiles = profileLoading.loadProfiles()
