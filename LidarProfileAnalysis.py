@@ -18,11 +18,12 @@ profiles = profileLoading.load_hdf5_profiles(HDF5_FILE)
 plotter = pv.Plotter()
 
 plotter = plottingProfiles3D.add_3d_points_to_plot(plottingProfiles3D.get_profile_points_for_plot(profiles), plotter, 'blue')
-rotate_pointcloud(profiles)
-#translate_floor_to_zero(profiles)
 
+plottingProfiles3D.add_lines_to_plot(line_points_from_floorSides(profiles), plotter, 'red')
+rotate_pointcloud(profiles)
+translate_floor_to_zero(profiles)
 #find_border_points(profiles)
-        #p.find_smooth_slope()
+#p.find_smooth_slope()
         #p.width_from_smoothed_slope()
 plotter = plottingProfiles3D.add_3d_points_to_plot(plottingProfiles3D.get_profile_points_for_plot(profiles), plotter, 'green')
 

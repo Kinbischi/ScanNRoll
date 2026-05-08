@@ -22,13 +22,7 @@ points_3d = np.column_stack((x, y, np.zeros_like(x)))
 
 def get_profile_points_for_plot(profiles: list[profileData]):
     
-    profile_points = []
-    for i in range(len(profiles)):
-        profile = profiles[i]
-        prof = np.column_stack((profile.x, profile.z, np.zeros_like(profile.x)))
-        profile_points.append(prof)
-    return profile_points
-    #return [np.column_stack((profile.x, profile.z, np.zeros_like(profile.x))) for profile in profiles]
+    return [np.column_stack((profile.x, profile.z, np.zeros_like(profile.x))) for profile in profiles]
 
 def add_3d_points_to_plot(points, plotter, colour = 'green'):
     distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
@@ -54,7 +48,32 @@ def add_3d_points_to_plot(points, plotter, colour = 'green'):
         
     return plotter
 
+def add_lines_to_plot(linePoints, plotter, colour = 'green'):
+    distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
 
+    pathPoints,tiltAngles = compute_print_path_and_angle(distances)
+    
+    for i in range(len(linePoints)):
+        p0 = linePoints[i][0]
+        p1 = linePoints[i][1]
+        # rotate profile to match path direction
+        rot_matrix = np.array([
+        [np.cos(tiltAngles[i]), 0, np.sin(tiltAngles[i])],
+        [0, 1, 0],
+        [-np.sin(tiltAngles[i]), 0, np.cos(tiltAngles[i])]
+        ])
+        p0 = p0 @ rot_matrix.T+pathPoints[i]    #rotate points and translate to path
+        p1 = p1 @ rot_matrix.T+pathPoints[i]
+
+        if p0.shape[0] > 0:
+            line = pv.Line(p0, p1)
+            plotter.add_mesh(line, color = colour, line_width=5) # size was 5
+        
+    return plotter
+
+#TODO: currently, print path is in xz plane and profile height in y plane
+# --> this is confusing --> change profile output to y for height
+# also think about unit and label all unit dep. empirical constants
 def compute_print_path_and_angle(distances):
     
     # path parameters

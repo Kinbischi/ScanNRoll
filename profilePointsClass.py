@@ -4,7 +4,7 @@ from sklearn.neighbors import NearestNeighbors
 import re
 from dataclasses import dataclass
 from typing import Optional
-
+import pyvista as pv
 
 @dataclass
 class profileData:
@@ -61,6 +61,8 @@ class profileData:
             self.width = np.nan
         else:
             self.width = np.round(abs(self.x[self.peaks[0]]-self.x[self.peaks[1]]), decimals=2)
+    
+    
     """
     # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")
     def integrate_area(self):
@@ -86,6 +88,15 @@ class profileData:
         self.maxPlace = np.argmax(self.y)
     """
 
+def line_points_from_floorSides(profiles: list[profileData]):
+    linesPoints=[]
+    for p in profiles:
+        m,b = get_baseline_from_profileBorder(p.x,p.z)
+        p0=(p.x[0],m*p.x[0]+b,0)
+        p1=(p.x[-1],m*p.x[-1]+b,0)
+        
+        linesPoints.append((p0,p1))
+    return linesPoints
 
 
 def translate_floor_to_zero(profiles: list[profileData]):
@@ -111,12 +122,14 @@ def rotate_pointcloud(profiles: list[profileData]):
             p.x = rotatedPoints[:,0]
             p.z = rotatedPoints[:,1]
 
+
+#TODO: unit is currently: 20 is 0.20mm aka 200 microns --> change?
 def find_border_points(profiles: list[profileData]):
     for p in profiles:
         borderPoints = np.empty(len(p.x), dtype=bool)
         profilePoints = np.empty(len(p.z), dtype=bool)
         for i in range(len(p.z)):
-            if p.z[i] > 0.2: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
+            if p.z[i] > 20: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
                 profilePoints[i] = True
                 borderPoints[i] = False
             else:
@@ -141,7 +154,7 @@ def get_baseline_from_profileBorder(x ,y, borderPoints=30):
         LSerror = np.sqrt(residuals[0])
 
         #if error is not low enough --> not both sides of the floor were caught
-        if LSerror > 0.5:
+        if LSerror > 50:        #take care --> this value depends on the unit (e.g. mm or um)
             profileBordersX1 = x[:n]
             profileBordersY1 = y[:n]
             profileBordersX2 = x[-n:]
