@@ -17,59 +17,78 @@ yBox2 = np.linspace(1,0,50)*r
 x = np.concatenate((xCircle, xBox1, xBox2))
 y = np.concatenate((yCircle, yBox1, yBox2))
 points_3d = np.column_stack((x, y, np.zeros_like(x)))
-
 """
+
+class plottingClass:
+    def __init__(self, numOfprofiles):
+        self.plotter = pv.Plotter()
+        
+        distances = np.ones(numOfprofiles) * 2000  # 2.0 units between each profile
+        self.pathPoints, self.tiltAngles = compute_print_path_and_angle(distances)
+        self.rotation_matrices = [np.array([
+            [np.cos(theta), 0, np.sin(theta)],
+            [0, 1, 0],
+            [-np.sin(theta), 0, np.cos(theta)]
+        ])for theta in self.tiltAngles]
+        
+    def show(self):
+        self.plotter.add_camera_orientation_widget()
+        self.plotter.show()
+        
+    def plot(self, profiles: list[profileData],plotSubject:str, colour:str):
+        match plotSubject:
+            case "profile":
+                self.add_3d_points_to_plot(get_profile_points_for_plot(profiles), colour)
+            case "baseline":
+                self.add_lines_to_plot(line_points_from_floorSides(profiles), colour)
+        
+
+    def add_3d_points_to_plot(self,points, colour = 'green'):
+        distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
+        #totalDistances = np.cumsum(distances)
+
+        pathPoints,tiltAngles = compute_print_path_and_angle(distances)
+        
+        #TODO: check how the real profiles are set (do they need to be inverted 180 deg?)
+        for i,prof in enumerate(points):
+            # rotate profile to match path direction
+            prof = prof @ self.rotation_matrices[i].T
+            
+            if prof.shape[0] > 0:
+                cloud = pv.PolyData(pathPoints[i]+prof)
+                self.plotter.add_points(cloud, color = colour, point_size=5, render_points_as_spheres=True)
+            
+    def add_lines_to_plot(self, linePoints, colour = 'green'):
+        distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
+
+        pathPoints,tiltAngles = compute_print_path_and_angle(distances)
+        
+        for i in range(len(linePoints)):
+            p0 = linePoints[i][0]
+            p1 = linePoints[i][1]
+            # rotate profile to match path direction
+            rot_matrix = self.rotation_matrices[i]
+            p0 = p0 @ rot_matrix.T+pathPoints[i]    #rotate points and translate to path
+            p1 = p1 @ rot_matrix.T+pathPoints[i]
+
+            if p0.shape[0] > 0:
+                line = pv.Line(p0, p1)
+                self.plotter.add_mesh(line, color = colour, line_width=5) # size was 5
+
 
 def get_profile_points_for_plot(profiles: list[profileData]):
     
     return [np.column_stack((profile.x, profile.z, np.zeros_like(profile.x))) for profile in profiles]
 
-def add_3d_points_to_plot(points, plotter, colour = 'green'):
-    distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
-    #totalDistances = np.cumsum(distances)
-
-    pathPoints,tiltAngles = compute_print_path_and_angle(distances)
-    
-    #TODO: check how the real profiles are set (do they need to be inverted 180 deg?)
-    for i in range(len(points)):
-        prof = points[i]
-        # rotate profile to match path direction
-        rot_matrix = np.array([
-        [np.cos(tiltAngles[i]), 0, np.sin(tiltAngles[i])],
-        [0, 1, 0],
-        [-np.sin(tiltAngles[i]), 0, np.cos(tiltAngles[i])]
-        ])
-        prof = prof @ rot_matrix.T
+def line_points_from_floorSides(profiles: list[profileData]):
+    linesPoints=[]
+    for p in profiles:
+        m,b = get_baseline_from_profileBorder(p.x,p.z)
+        p0=(p.x[0],m*p.x[0]+b,0)
+        p1=(p.x[-1],m*p.x[-1]+b,0)
         
-        if prof.shape[0] > 0:
-            cloud = pv.PolyData(pathPoints[i]+prof)
-            plotter.add_points(cloud, color = colour, point_size=5, render_points_as_spheres=True) # size was 5
-            #plotter.add_points(cloud.points[0], point_size=6, render_points_as_spheres=True,color='red') # size was 5
-        
-    return plotter
-
-def add_lines_to_plot(linePoints, plotter, colour = 'green'):
-    distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
-
-    pathPoints,tiltAngles = compute_print_path_and_angle(distances)
-    
-    for i in range(len(linePoints)):
-        p0 = linePoints[i][0]
-        p1 = linePoints[i][1]
-        # rotate profile to match path direction
-        rot_matrix = np.array([
-        [np.cos(tiltAngles[i]), 0, np.sin(tiltAngles[i])],
-        [0, 1, 0],
-        [-np.sin(tiltAngles[i]), 0, np.cos(tiltAngles[i])]
-        ])
-        p0 = p0 @ rot_matrix.T+pathPoints[i]    #rotate points and translate to path
-        p1 = p1 @ rot_matrix.T+pathPoints[i]
-
-        if p0.shape[0] > 0:
-            line = pv.Line(p0, p1)
-            plotter.add_mesh(line, color = colour, line_width=5) # size was 5
-        
-    return plotter
+        linesPoints.append((p0,p1))
+    return linesPoints
 
 #TODO: currently, print path is in xz plane and profile height in y plane
 # --> this is confusing --> change profile output to y for height

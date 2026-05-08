@@ -88,16 +88,6 @@ class profileData:
         self.maxPlace = np.argmax(self.y)
     """
 
-def line_points_from_floorSides(profiles: list[profileData]):
-    linesPoints=[]
-    for p in profiles:
-        m,b = get_baseline_from_profileBorder(p.x,p.z)
-        p0=(p.x[0],m*p.x[0]+b,0)
-        p1=(p.x[-1],m*p.x[-1]+b,0)
-        
-        linesPoints.append((p0,p1))
-    return linesPoints
-
 
 def translate_floor_to_zero(profiles: list[profileData]):
         for p in profiles:

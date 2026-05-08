@@ -9,25 +9,25 @@ import pyvista as pv
 
 import profileLoading
 import plottingProfiles3D
+
+from plottingProfiles3D import *
 from profilePointsClass import *
 from profileRegistration import *
 
 HDF5_FILE = "HDf5data/TestExperiments/udp_profiles_772profiles_same.h5"
 profiles = profileLoading.load_hdf5_profiles(HDF5_FILE)
 
-plotter = pv.Plotter()
+plotter = plottingProfiles3D.plottingClass(len(profiles))
 
-plotter = plottingProfiles3D.add_3d_points_to_plot(plottingProfiles3D.get_profile_points_for_plot(profiles), plotter, 'blue')
-
-plottingProfiles3D.add_lines_to_plot(line_points_from_floorSides(profiles), plotter, 'red')
+plotter.plot(profiles,"profile",'blue')
+plotter.plot(profiles,"baseline",'red')
 rotate_pointcloud(profiles)
 translate_floor_to_zero(profiles)
 #find_border_points(profiles)
 #p.find_smooth_slope()
-        #p.width_from_smoothed_slope()
-plotter = plottingProfiles3D.add_3d_points_to_plot(plottingProfiles3D.get_profile_points_for_plot(profiles), plotter, 'green')
+#p.width_from_smoothed_slope()
+plotter.plot(profiles,"profile", 'green')
 
-plotter.add_camera_orientation_widget()
 plotter.show()
 
 """
