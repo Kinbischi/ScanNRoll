@@ -20,13 +20,17 @@ profiles = profileLoading.load_hdf5_profiles(HDF5_FILE)
 plotter = plottingProfiles3D.plottingClass(len(profiles))
 
 plotter.plot(profiles,"profile",'blue')
-plotter.plot(profiles,"baseline",'red')
+#plotter.plot(profiles,"baseline",'red')
 rotate_pointcloud(profiles)
 translate_floor_to_zero(profiles)
+find_smooth_slope(profiles)
+width_from_smoothed_slope(profiles)
 #find_border_points(profiles)
-#p.find_smooth_slope()
-#p.width_from_smoothed_slope()
+
 plotter.plot(profiles,"profile", 'green')
+plotter.plot(profiles,"widthPoints", 'yellow',10)
+
+
 
 plotter.show()
 
@@ -50,7 +54,7 @@ for group in profileGroups:
     joinedProfiles.append(pTesting)
     newX.append(nX)
     newY.append(nY)
- 
+
 
 # TODO:
 # make sure that points are sorted (along profile line) for area algo

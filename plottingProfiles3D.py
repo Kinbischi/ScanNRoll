@@ -29,21 +29,35 @@ class plottingClass:
             [np.cos(theta), 0, np.sin(theta)],
             [0, 1, 0],
             [-np.sin(theta), 0, np.cos(theta)]
-        ])for theta in self.tiltAngles]
+        ]) for theta in self.tiltAngles]
         
     def show(self):
         self.plotter.add_camera_orientation_widget()
         self.plotter.show()
-        
-    def plot(self, profiles: list[profileData],plotSubject:str, colour:str):
+         
+        #TODO: add option for getting out smoothed profiles
+        # why are width points shifted?
+        # take border points out?
+    def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5):
         match plotSubject:
             case "profile":
-                self.add_3d_points_to_plot(get_profile_points_for_plot(profiles), colour)
+                self.add_3d_points_to_plot(get_profile_points_for_plot(profiles), colour, size)
             case "baseline":
                 self.add_lines_to_plot(line_points_from_floorSides(profiles), colour)
-        
+            case "widthPoints":
+                #TODO is not working
+                
+                widthPoints = []
+                for p in profiles:
+                    if p.peaks is not None and len(p.peaks) == 2:
+                        test = np.array([[p.x[p.peaks[0]], p.z[p.peaks[0]], 0], [p.x[p.peaks[1]], p.z[p.peaks[1]], 0]])
+                        widthPoints.append(test)
+                self.add_3d_points_to_plot(widthPoints, colour, size)
+                #widthPoints = [np.array([(p.x[p.peaks[0]], p.z[p.peaks[0]], 0), (p.x[p.peaks[1]], p.z[p.peaks[1]], 0)]) for p in profiles]
+                #widthPoints = [np.column_stack([(p.x[p.peaks[0]], p.z[p.peaks[0]], 0), (p.x[p.peaks[1]], p.z[p.peaks[1]], 0)])] for p in profiles]
+                #widthPoints = [np.column_stack((p.x[p.peaks[0]], p.z, np.zeros_like(p.x))) for p in profiles]
 
-    def add_3d_points_to_plot(self,points, colour = 'green'):
+    def add_3d_points_to_plot(self,points, colour = 'green', point_size=5):
         distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
         #totalDistances = np.cumsum(distances)
 
@@ -56,7 +70,7 @@ class plottingClass:
             
             if prof.shape[0] > 0:
                 cloud = pv.PolyData(pathPoints[i]+prof)
-                self.plotter.add_points(cloud, color = colour, point_size=5, render_points_as_spheres=True)
+                self.plotter.add_points(cloud, color = colour, point_size=point_size, render_points_as_spheres=True)
             
     def add_lines_to_plot(self, linePoints, colour = 'green'):
         distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile

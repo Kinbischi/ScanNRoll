@@ -39,28 +39,7 @@ class profileData:
     
     
 
-    def find_smooth_slope(self):
-        self.ySlope = abs(np.gradient(self.z,self.x))
-
-        ySmooth = moving_average(self.z,15)
-        ySmooth = moving_average(ySmooth,9)
-        ySmooth = moving_average(ySmooth,5)
-        ySmooth = moving_average(ySmooth,5)
-        self.ySmooth = ySmooth
-
-        ySlopeSmooth = abs(np.gradient(ySmooth,self.x))
-        ySlopeSmooth = moving_average(ySlopeSmooth,65)
-        ySlopeSmooth = moving_average(ySlopeSmooth,55)
-        ySlopeSmooth = moving_average(ySlopeSmooth,15)
-        ySlopeSmooth = moving_average(ySlopeSmooth,5)
-        self.ySlopeSmooth = ySlopeSmooth
-
-    def width_from_smoothed_slope(self):
-        self.peaks, properties = sp.signal.find_peaks(self.ySlopeSmooth,height=0.15,distance=50)
-        if len(self.peaks) != 2:
-            self.width = np.nan
-        else:
-            self.width = np.round(abs(self.x[self.peaks[0]]-self.x[self.peaks[1]]), decimals=2)
+    
     
     
     """
@@ -88,29 +67,60 @@ class profileData:
         self.maxPlace = np.argmax(self.y)
     """
 
+def find_smooth_slope(profiles: list[profileData]):
+    for p in profiles:
+        if p.x.shape[0] < 10: # TODO empirical value
+            return #empty profile --> skip
+        
+        p.ySlope = abs(np.gradient(p.z,p.x))
+
+        ySmooth = moving_average(p.z,15)
+        ySmooth = moving_average(ySmooth,9)
+        ySmooth = moving_average(ySmooth,5)
+        ySmooth = moving_average(ySmooth,5)
+        p.ySmooth = ySmooth
+
+        ySlopeSmooth = abs(np.gradient(ySmooth,p.x))
+        ySlopeSmooth = moving_average(ySlopeSmooth,65)
+        ySlopeSmooth = moving_average(ySlopeSmooth,55)
+        ySlopeSmooth = moving_average(ySlopeSmooth,15)
+        ySlopeSmooth = moving_average(ySlopeSmooth,5)
+        p.ySlopeSmooth = ySlopeSmooth
+
+def width_from_smoothed_slope(profiles: list[profileData]):
+    for p in profiles:
+        if p.x.shape[0] < 10: # TODO empirical value
+            p.width = np.nan
+            return #empty profile --> skip
+        
+        p.peaks, properties = sp.signal.find_peaks(p.ySlopeSmooth,height=0.15,distance=50)
+        if len(p.peaks) != 2:
+            p.width = np.nan
+        else:
+            p.width = np.round(abs(p.x[p.peaks[0]]-p.x[p.peaks[1]]), decimals=2)
 
 def translate_floor_to_zero(profiles: list[profileData]):
-        for p in profiles:
-            m,b = get_baseline_from_profileBorder(p.x,p.z)
-            p.z = p.z-b
-            p.x = p.x
-        return profiles
+    for p in profiles:
+        m,b = get_baseline_from_profileBorder(p.x,p.z)
+        p.z = p.z-b
+        p.x = p.x
+    return profiles
 
 def rotate_pointcloud(profiles: list[profileData]):
-        for p in profiles:
-            m,b = get_baseline_from_profileBorder(p.x,p.z)
+    for p in profiles:
+        m,b = get_baseline_from_profileBorder(p.x,p.z)
 
-            angle_deg = np.arctan(m)*180/np.pi
+        angle_deg = np.arctan(m)*180/np.pi
 
-            angle_rad = -np.pi/180 * angle_deg
-            R = np.array([
-                [np.cos(angle_rad), -np.sin(angle_rad)],
-                [np.sin(angle_rad),  np.cos(angle_rad)]
-            ])
-            points =np.column_stack((p.x, p.z))
-            rotatedPoints = points @ R.T
-            p.x = rotatedPoints[:,0]
-            p.z = rotatedPoints[:,1]
+        angle_rad = -np.pi/180 * angle_deg
+        R = np.array([
+            [np.cos(angle_rad), -np.sin(angle_rad)],
+            [np.sin(angle_rad),  np.cos(angle_rad)]
+        ])
+        points =np.column_stack((p.x, p.z))
+        rotatedPoints = points @ R.T
+        p.x = rotatedPoints[:,0]
+        p.z = rotatedPoints[:,1]
 
 
 #TODO: unit is currently: 20 is 0.20mm aka 200 microns --> change?
