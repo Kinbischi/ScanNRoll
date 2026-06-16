@@ -1,5 +1,6 @@
 import socket
 import struct
+import time
 import numpy as np
 import h5py
 from dataclasses import dataclass
@@ -48,6 +49,7 @@ class ProfileData:
     measurement_rate_hz: Optional[float] = None
     profile_length: Optional[int] = None
     measurement_block_id: Optional[int] = None
+    arrival_time: Optional[float] = None
 
 def parse_header(data: bytes):
     if len(data) < 8:
@@ -105,6 +107,8 @@ class HDF5ProfileWriter:
             group.attrs["profile_length"] = data.profile_length
         if data.measurement_block_id is not None:
             group.attrs["measurement_block_id"] = data.measurement_block_id
+        if data.arrival_time is not None:
+            group.attrs["arrival_time"] = data.arrival_time
 
         if data.x is not None and data.z is not None:
             group.create_dataset("x", data=data.x, compression="gzip")
@@ -167,7 +171,8 @@ def parse_udp_packet_zProfile(data: bytes) -> ProfileData:
         timestamp_sec=timestamp_sec,
         timestamp_usec=timestamp_usec,
         encoderValue=encoderValue,
-        profile_length=profile_length
+        profile_length=profile_length,
+        arrival_time=time.time()
     )
 
 
