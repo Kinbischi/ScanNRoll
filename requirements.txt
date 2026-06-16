@@ -1,0 +1,17 @@
+# Runtime dependencies for the LIDAR profile analysis project.
+# Derived from the actual imports in the source files.
+#
+# Versions are intentionally left unpinned for now (single-developer research
+# project). When the environment stabilises, freeze exact versions with:
+#     pip freeze > requirements.lock.txt
+# and pin the critical ones here (numpy / scipy / pyvista move fastest).
+
+numpy           # numerical arrays, the core data type used everywhere
+scipy           # signal.find_peaks, spatial.KDTree, optimize.minimize
+matplotlib      # 2D plotting (legacy / debugging views)
+h5py            # reading & writing the HDF5 profile store
+pyvista         # interactive 3D visualisation of profiles
+scikit-learn    # NearestNeighbors (used by registration helpers)
+
+# ---- Standard library (no install needed, listed for clarity) ----
+# socket, struct, time, os, re, copy, pathlib, dataclasses, typing

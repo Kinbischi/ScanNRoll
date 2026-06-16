@@ -1,0 +1,50 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- Editors / OS ----
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+
+# ---- Project data & outputs (large / machine-generated) ----
+# NOTE: these directories may already be tracked in git history. This file only
+# prevents *future* additions from being staged; to stop tracking existing files
+# run e.g. `git rm -r --cached HDf5data` once.
+HDf5data/
+ProfileData/
+Pics/
+RandomOther/
+old/
+testGIthubCircleSquare/
+
+# Raw / processed data files
+*.h5
+*.hdf5
+
+# Large reference binaries
+*.pdf
