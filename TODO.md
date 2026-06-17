@@ -17,10 +17,9 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
       block in `LidarProfileAnalysis.py` read a `.y` field that `profileData` no
       longer has. Dormant today, but will `AttributeError` the instant
       registration is re-enabled. Fix all references together.
-- [ ] **Resolve the `ProfileData` / `profileData` name collision.** Rename the
-      wire-format class in `udpCapturing.py` (e.g. `RawProfilePacket`) so it can't
-      be confused with the analysis `profileData`. Update its references in the
-      same commit. (HDF5 field names are unaffected — keep those stable.)
+- [x] ~~**Resolve the `ProfileData` / `profileData` name collision.**~~ Done — the
+      wire-format class in `udpCapturing.py` was renamed to `ProfileDataRaw`. See
+      [CHANGELOG.md](CHANGELOG.md).
 
 ## P2 — Maintainability
 

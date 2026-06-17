@@ -14,12 +14,16 @@ from plottingProfiles3D import *
 from profilePointsClass import *
 from profileRegistration import *
 
-HDF5_FILE = "HDf5data/TestExperiments/udp_profiles_772profiles_same.h5"
+#HDF5_FILE = "HDf5data/TestExperiments/udp_profiles_772profiles_same.h5"
+HDF5_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercontentchangeExp2Sensor.h5"
 profiles = profileLoading.load_hdf5_profiles(HDF5_FILE)
+
+profiles = profiles[0:2000]
 
 plotter = plottingProfiles3D.plottingClass(len(profiles))
 
-plotter.plot(profiles,"profile",'blue')
+#plotter.plot(profiles,"profile",'blue')
+
 #plotter.plot(profiles,"baseline",'red')
 rotate_pointcloud(profiles)
 translate_floor_to_zero(profiles)

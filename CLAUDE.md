@@ -62,9 +62,9 @@ is legacy and incorrect (it predates the rename). Never introduce new `.y` acces
 on `profileData`. (In 3D plotting, height is currently mapped into PyVista's y
 slot — that is a plotting detail, documented in ARCHITECTURE.md, not a data field.)
 
-There are **two** dataclasses with confusingly similar names:
+There are **two** distinct profile dataclasses — keep them separate:
 - `profilePointsClass.profileData` — the analysis model (`x`, `z`, derived fields).
-- `udpCapturing.ProfileData` — the wire/storage model (packet + measurement fields).
+- `udpCapturing.ProfileDataRaw` — the wire/storage model (packet + measurement fields).
 
 Be explicit about which one you mean. Do not merge them in a drive-by edit.
 

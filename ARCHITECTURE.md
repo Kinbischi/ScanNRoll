@@ -25,12 +25,13 @@ The system has two halves that meet at an HDF5 file:
 ```
 
 - **Acquisition** (`udpCapturing.py`) is standalone: it shares no imports with the
-  analysis code and owns its own `ProfileData` dataclass tuned to the wire format.
+  analysis code and owns its own `ProfileDataRaw` dataclass tuned to the wire format.
 - **Analysis** (everything else) reads the HDF5 store into a different
   `profileData` dataclass and runs the processing / visualisation pipeline.
 
-> ⚠️ The two dataclasses have nearly identical names (`ProfileData` vs
-> `profileData`) but completely different fields. See *Known technical debt*.
+> The two dataclasses serve different layers and are now named distinctly —
+> `ProfileDataRaw` (wire/storage) vs `profileData` (analysis). They share no
+> fields and must not be merged.
 
 ---
 
@@ -38,7 +39,7 @@ The system has two halves that meet at an HDF5 file:
 
 | Module | Responsibility | Status |
 | ------ | -------------- | ------ |
-| `udpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileData`. | Active (standalone) |
+| `udpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileDataRaw`. | Active (standalone) |
 | `profilePointsClass.py` | Defines the analysis `profileData` dataclass **and** the free functions that operate on lists of it: rotate, level, smooth, width detection, border detection, baseline fit, moving average. The processing core. | Active |
 | `profileLoading.py` | `load_hdf5_profiles()` reads the HDF5 store into `profileData` objects. Also holds legacy CSV loaders/plotters (`loadProfiles`, `plotProfiles`, `groupProfiles`). | Mixed (loader active, rest legacy) |
 | `plottingProfiles3D.py` | `plottingClass` — PyVista 3D rendering; computes the print path & per-profile tilt angles and places each profile along it. | Active |
@@ -155,7 +156,7 @@ Severity is relative to *current* behaviour. Full remediation backlog in
 | # | Issue | Risk |
 | - | ----- | ---- |
 | 1 | **`.y` vs `.z` mismatch.** `profileRegistration.py`, `profileLoading.py` (`plotProfiles`/`loadProfiles`) and the commented block in `LidarProfileAnalysis.py` read `.y`, but `profileData` only defines `x`/`z`. | High *(latent)* — does not affect the active path, but the registration pipeline will `AttributeError` the moment it is re-enabled. |
-| 2 | **Name collision** between the wire-format `ProfileData` (`udpCapturing.py`) and analysis `profileData` (`profilePointsClass.py`). | Medium — easy to confuse when editing; obstructs any future sharing. |
+| 2 | ~~**Name collision** between the wire-format `ProfileData` (`udpCapturing.py`) and analysis `profileData` (`profilePointsClass.py`).~~ **Resolved:** the wire-format class is now `ProfileDataRaw`. | — |
 | 3 | **Wildcard imports** (`from x import *`) across all analysis modules. | Medium — hidden coupling, namespace leakage, hard to trace symbol origins. |
 | 4 | **Magic constants** scattered and undocumented: smoothing windows `15/9/5/5/65/55/15/5`, peak `height=0.15, distance=50`, border threshold `20`, baseline `borderPoints=30` & error `50`, path geometry `2000/5000/80000`, UDP address/port, parser byte offsets. | Medium — tuning is opaque; values are unit-dependent (≈ 0.01 mm units). |
 | 5 | **Dead code & unused imports**: large commented blocks in three modules; unused `copy`, `NearestNeighbors`, `pyvista` (in the class module); unused `loadProfiles`/`plotProfiles`. | Low — clutter, risk of "fixing" code that never runs. |

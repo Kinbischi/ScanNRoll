@@ -13,7 +13,7 @@ HDF5_FILE = "udp_profiles.h5"
 #notes: optional out, frame index and type out of dataclass
 # make it that everything fills class (no intermediate dicts)
 # find_next_index out
-# check in ProfileData class if stuff is there --> then only send package
+# check in ProfileDataRaw class if stuff is there --> then only send package
 # generate a reader function to read in hdf5
 @dataclass
 class MeasurementData:
@@ -31,7 +31,7 @@ class MeasurementData:
     encoderPosition: int
 
 @dataclass
-class ProfileData:
+class ProfileDataRaw:
     block_id: int
     frame_type: int
     frame_index: int
@@ -71,7 +71,7 @@ class HDF5ProfileWriter:
             return 0
         return max(int(name.split("_", 1)[1]) for name in names) + 1
 
-    def write_profile(self, data: ProfileData):
+    def write_profile(self, data: ProfileDataRaw):
         group_name = f"profile_{self.next_index:06d}"
         group = self.file.create_group(group_name)
         group.attrs["block_id"] = data.block_id
@@ -121,7 +121,7 @@ class HDF5ProfileWriter:
         self.file.close()
 
 
-def parse_udp_packet_zProfile(data: bytes) -> ProfileData:
+def parse_udp_packet_zProfile(data: bytes) -> ProfileDataRaw:
     if len(data) < 32:
         raise ValueError("Z-profile packet too short")
 
@@ -155,7 +155,7 @@ def parse_udp_packet_zProfile(data: bytes) -> ProfileData:
         x[i] = struct.unpack_from("<h", data, offset)[0]
         z[i] = struct.unpack_from("<H", data, offset + 2)[0]
 
-    return ProfileData(
+    return ProfileDataRaw(
         block_id=block_id,
         frame_type=frame_type,
         frame_index=frame_index,
@@ -233,7 +233,7 @@ def run_udp_listener():
 
     writer = HDF5ProfileWriter(HDF5_FILE)
     measurement_dict = {}  # block_id -> MeasurementData
-    zprofile_dict = {}  # block_id -> ProfileData
+    zprofile_dict = {}  # block_id -> ProfileDataRaw
     last_z_fragment = None
 
     print(f"Listening on {UDP_IP}:{UDP_PORT}...")

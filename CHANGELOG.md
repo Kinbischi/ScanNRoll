@@ -8,6 +8,12 @@ This project does not yet use formal version numbers; changes accumulate under
 
 ## [Unreleased]
 
+### Changed
+- Renamed the wire-format dataclass `ProfileData` → `ProfileDataRaw` in
+  `udpCapturing.py` to remove the name collision with the analysis `profileData`
+  (`profilePointsClass.py`). All references within the module were updated;
+  behaviour and the HDF5 schema are unchanged.
+
 ### Added
 - Project documentation and scaffolding (no runtime code changed):
   - `README.md` — project overview, quickstart, data flow, documentation map.

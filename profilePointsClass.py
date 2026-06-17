@@ -38,10 +38,6 @@ class profileData:
             self.profileNumber = int(profileNumberMatch.group(1))
     
     
-
-    
-    
-    
     """
     # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")
     def integrate_area(self):

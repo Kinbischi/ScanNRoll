@@ -34,28 +34,28 @@ class plottingClass:
     def show(self):
         self.plotter.add_camera_orientation_widget()
         self.plotter.show()
-         
+        
         #TODO: add option for getting out smoothed profiles
         # why are width points shifted?
         # take border points out?
-    def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5):
+    def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5) -> None:
         match plotSubject:
             case "profile":
                 self.add_3d_points_to_plot(get_profile_points_for_plot(profiles), colour, size)
             case "baseline":
                 self.add_lines_to_plot(line_points_from_floorSides(profiles), colour)
             case "widthPoints":
-                #TODO is not working
-                
+                # one entry per profile so width points land on the correct path slot;
+                # profiles without two peaks get an empty (0, 3) array (skipped on plot)
                 widthPoints = []
                 for p in profiles:
                     if p.peaks is not None and len(p.peaks) == 2:
-                        test = np.array([[p.x[p.peaks[0]], p.z[p.peaks[0]], 0], [p.x[p.peaks[1]], p.z[p.peaks[1]], 0]])
-                        widthPoints.append(test)
+                        wp = np.array([[p.x[p.peaks[0]], p.z[p.peaks[0]], 0],
+                                       [p.x[p.peaks[1]], p.z[p.peaks[1]], 0]])
+                    else:
+                        wp = np.empty((0, 3))
+                    widthPoints.append(wp)
                 self.add_3d_points_to_plot(widthPoints, colour, size)
-                #widthPoints = [np.array([(p.x[p.peaks[0]], p.z[p.peaks[0]], 0), (p.x[p.peaks[1]], p.z[p.peaks[1]], 0)]) for p in profiles]
-                #widthPoints = [np.column_stack([(p.x[p.peaks[0]], p.z[p.peaks[0]], 0), (p.x[p.peaks[1]], p.z[p.peaks[1]], 0)])] for p in profiles]
-                #widthPoints = [np.column_stack((p.x[p.peaks[0]], p.z, np.zeros_like(p.x))) for p in profiles]
 
     def add_3d_points_to_plot(self,points, colour = 'green', point_size=5):
         distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
@@ -70,7 +70,7 @@ class plottingClass:
             
             if prof.shape[0] > 0:
                 cloud = pv.PolyData(pathPoints[i]+prof)
-                self.plotter.add_points(cloud, color = colour, point_size=point_size, render_points_as_spheres=True)
+                self.plotter.add_points(cloud, color = colour, point_size=point_size, render_points_as_spheres=False)
             
     def add_lines_to_plot(self, linePoints, colour = 'green'):
         distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
