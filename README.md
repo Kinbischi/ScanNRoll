@@ -39,18 +39,23 @@ pip install -r requirements.txt
 ### Capture profiles from the sensor
 
 ```bash
-python udpCapturing.py
+python rawProfileUdpCapturing.py
 ```
-Listens on the UDP address/port set at the top of `udpCapturing.py`
+Listens on the UDP address/port set at the top of `rawProfileUdpCapturing.py`
 (`192.168.0.251:1234` by default) and appends to an HDF5 file.
 
-### Analyse and visualise stored profiles
+### Process, then visualise stored profiles
+
+Processing is decoupled from plotting so the view can be re-run cheaply. Run the
+process step once (writes a processed cache), then the plot step as often as you like:
 
 ```bash
-python LidarProfileAnalysis.py
+python profileProcessing.py   # raw HDF5 → process → processed cache (run once)
+python dataAnalysis.py      # processed cache → interactive 3D view (run freely)
 ```
-Loads the HDF5 file named near the top of the script, processes the profiles, and
-opens an interactive PyVista 3D window. Requires a display.
+`profileProcessing.py` reads the raw file named at the top of the script (optionally a
+profile index range); `dataAnalysis.py` loads the processed cache and opens an
+interactive PyVista 3D window (requires a display).
 
 > **Note:** file paths and the sensor IP are currently hardcoded in the scripts.
 > See [TODO.md](TODO.md) for the plan to parameterise them.
@@ -60,11 +65,14 @@ opens an interactive PyVista 3D window. Requires a display.
 ## Data flow
 
 ```
- Baumer OX200 ──UDP──> udpCapturing.py ──> HDf5data/*.h5
+ Baumer OX200 ──UDP──> rawProfileUdpCapturing.py ──> HDf5data/*.h5 (raw)
                                               │
                                               ▼
-                                  LidarProfileAnalysis.py
-                                   (load → process → plot)
+                                  profileProcessing.py ──> *_processed.h5 (cache)
+                                                              │
+                                                              ▼
+                                                        dataAnalysis.py
+                                                        (load cache → 3D plot)
 ```
 
 ## Where things live
@@ -95,6 +103,7 @@ opens an interactive PyVista 3D window. Requires a display.
 
 | Script                              | Role                                              |
 | ----------------------------------- | ------------------------------------------------- |
-| `udpCapturing.py`                   | Acquisition: sensor → HDF5                         |
-| `LidarProfileAnalysis.py`           | **Active** analysis & 3D visualisation pipeline    |
+| `rawProfileUdpCapturing.py`                   | Acquisition: sensor → HDF5                         |
+| `profileProcessing.py`                | **Active** process step: raw → processed cache     |
+| `dataAnalysis.py`                   | **Active** plot step: processed cache → 3D view    |
 | `LidarProfileAnalysis_oldRegistration.py` | Legacy analysis using the registration path  |

@@ -23,6 +23,8 @@ class profileData:
     ySlopeSmooth: Optional[np.ndarray] = None
     peaks: Optional[np.ndarray] = None
     width: Optional[float] = None
+    isFlat: Optional[bool] = None
+    flatness: Optional[float] = None
     area: Optional[float] = None
     shoelaceArea: Optional[float] = None
     shoelaceArea2: Optional[float] = None
@@ -63,10 +65,49 @@ class profileData:
         self.maxPlace = np.argmax(self.y)
     """
 
+def process_profiles(profiles: list[profileData]) -> list[profileData]:
+    """Run the full per-profile processing pipeline in place and return the list.
+
+    Order matters: level and rotate to the floor first, then smooth and measure
+    width on the levelled profile.
+    """
+    rotate_pointcloud(profiles)
+    translate_floor_to_zero(profiles)
+    find_smooth_slope(profiles)
+    width_from_smoothed_slope(profiles)
+    flag_flat_profiles(profiles)
+    return profiles
+
+# RMS residual of a straight-line fit to the whole profile, in profile units (~0.01 mm).
+# Below this a profile is "flat" (substrate only); above it a bead/curve is present.
+# Set in the valley of the bimodal distribution: the flat mode sits below ~200 and the
+# beaded mode above ~500. 250 separates them while still catching small/ramping beads
+# (e.g. the first profiles after a flat run, whose residuals cluster near 350-400 and
+# were wrongly marked flat at the previous threshold of 400).
+FLATNESS_RMS_THRESHOLD = 250
+
+def flag_flat_profiles(profiles: list[profileData], threshold: float = FLATNESS_RMS_THRESHOLD) -> None:
+    """Label each profile flat or not by how well a straight line fits all its points.
+
+    A flat (substrate-only) profile is essentially a tilted line, so its line-fit RMS
+    residual is small; a printed bead deviates from any line, giving a large residual.
+    Sets `flatness` (the RMS residual) and `isFlat` (residual < threshold). Too-short
+    profiles are treated as flat (no detectable curve).
+    """
+    for p in profiles:
+        if p.x.shape[0] < 10: # TODO empirical value
+            p.flatness = 0.0
+            p.isFlat = True
+            continue
+        coeffs, residuals, rank, singular_values, rcond = np.polyfit(p.x, p.z, 1, full=True)
+        rms = float(np.sqrt(residuals[0] / p.x.shape[0])) if residuals.size > 0 else 0.0
+        p.flatness = rms
+        p.isFlat = rms < threshold
+
 def find_smooth_slope(profiles: list[profileData]):
     for p in profiles:
         if p.x.shape[0] < 10: # TODO empirical value
-            return #empty profile --> skip
+            continue #too-short profile --> skip this one
         
         p.ySlope = abs(np.gradient(p.z,p.x))
 
@@ -87,7 +128,7 @@ def width_from_smoothed_slope(profiles: list[profileData]):
     for p in profiles:
         if p.x.shape[0] < 10: # TODO empirical value
             p.width = np.nan
-            return #empty profile --> skip
+            continue #too-short profile --> skip this one
         
         p.peaks, properties = sp.signal.find_peaks(p.ySlopeSmooth,height=0.15,distance=50)
         if len(p.peaks) != 2:

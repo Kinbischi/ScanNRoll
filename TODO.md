@@ -14,11 +14,11 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 - [ ] **Fix `.y` → `.z` in the registration path.** `profileRegistration.py`
       (`generateJoinedProfile`, `translateInX`, `registerAndShiftProfiles`),
       `profileLoading.py` (`plotProfiles`, `loadProfiles`), and the commented
-      block in `LidarProfileAnalysis.py` read a `.y` field that `profileData` no
+      block in `dataAnalysis.py` read a `.y` field that `profileData` no
       longer has. Dormant today, but will `AttributeError` the instant
       registration is re-enabled. Fix all references together.
 - [x] ~~**Resolve the `ProfileData` / `profileData` name collision.**~~ Done — the
-      wire-format class in `udpCapturing.py` was renamed to `ProfileDataRaw`. See
+      wire-format class in `rawProfileUdpCapturing.py` was renamed to `ProfileDataRaw`. See
       [CHANGELOG.md](CHANGELOG.md).
 
 ## P2 — Maintainability
@@ -37,7 +37,7 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 - [ ] **Parameterise hardcoded paths & the sensor IP/port** (CLI args or a small
       config) so the scripts run on another machine. Remove the absolute path in
       `loadProfiles()`.
-- [ ] **Harden the UDP boundary** in `udpCapturing.py`: replace the broad
+- [ ] **Harden the UDP boundary** in `rawProfileUdpCapturing.py`: replace the broad
       `except Exception` with specific exceptions, and bound/expire the
       `measurement_dict` / `zprofile_dict` buffers so out-of-order packets can't
       grow memory without limit.
@@ -45,10 +45,10 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 ## P3 — Polish & tooling
 
 - [ ] **Remove dead code & unused imports**: the large commented blocks in
-      `LidarProfileAnalysis.py`, `profileRegistration.py`, `profilePointsClass.py`;
+      `dataAnalysis.py`, `profileRegistration.py`, `profilePointsClass.py`;
       unused `copy`, `NearestNeighbors`, and `pyvista` (in `profilePointsClass.py`);
       unused legacy `loadProfiles` / `plotProfiles` if confirmed obsolete.
-- [ ] **Migrate `print` → `logging`** in `udpCapturing.py` (and elsewhere) with a
+- [ ] **Migrate `print` → `logging`** in `rawProfileUdpCapturing.py` (and elsewhere) with a
       module-level logger.
 - [ ] **Add a `pytest` suite** under `tests/`, starting with the pure functions
       (`moving_average`, `get_baseline_from_profileBorder`, width detection on a
@@ -58,7 +58,18 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 - [ ] **Clarify the coordinate mapping** in plotting (height → PyVista y slot) —
       either rename for clarity or document inline; see ARCHITECTURE.md §5.
 - [ ] **Consume HDF5 metadata** on the analysis side (timestamps, encoder, quality)
-      — currently written by the capturer but ignored by `load_hdf5_profiles`.
+      — currently written by the capturer but ignored by `load_profiles`.
+- [x] ~~**Avoid loading the whole raw file when only a slice is needed.**~~ Done —
+      `load_profiles(fileName, start, end)` reads only the range and `count_profiles()`
+      gives a fast pre-check. See [CHANGELOG.md](CHANGELOG.md).
+- [ ] **Persist smoothed arrays in the processed cache if a "plot smoothed profile"
+      view is wanted.** `save_profiles` skips the bulky intermediates listed in
+      `_TRANSIENT_FIELDS` (`ySmooth`/`ySlopeSmooth`/`ySlope`/`borderPoints`); drop one
+      from that set to persist it.
+- [ ] **Smoother large-cloud rendering beyond subsampling.** `plot()` now supports
+      `profile_step`/`point_step` decimation (~37M points lags otherwise). If full
+      detail with smooth interaction is needed, investigate a VTK level-of-detail
+      actor (full resolution when still, decimated while interacting).
 
 ---
 
@@ -66,8 +77,8 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 
 - `profilePointsClass.py`: `profileNumber` not always parsed correctly;
   several "empirical value" thresholds need justification.
-- `plottingProfiles3D.py`: width-points plotting marked "not working"; coordinate
+- `profile3Dplotting.py`: width-points plotting marked "not working"; coordinate
   system noted as confusing; "check whether real profiles need 180° inversion".
 - `profileRegistration.py`: "make a class again from this?"; joined-profile logic
   only handles <20% overhang; point ordering for area calc.
-- `udpCapturing.py`: NTP time sync strategy undecided; Python-side time sync.
+- `rawProfileUdpCapturing.py`: NTP time sync strategy undecided; Python-side time sync.

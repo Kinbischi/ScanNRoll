@@ -38,10 +38,28 @@ class plottingClass:
         #TODO: add option for getting out smoothed profiles
         # why are width points shifted?
         # take border points out?
-    def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5) -> None:
+    def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5,
+             profile_step: int = 1, point_step: int = 1, flat_colour: str | None = None) -> None:
+        """Add one subject ("profile", "baseline", "widthPoints") to the 3D scene.
+
+        profile_step / point_step subsample the dense "profile" cloud so interaction
+        stays responsive on very large datasets: plot every profile_step-th profile and
+        every point_step-th point. Both default to 1 (plot everything). They have no
+        effect on "baseline" or "widthPoints".
+
+        flat_colour (profiles only): if set, profiles flagged `isFlat` are drawn in this
+        colour and the rest in `colour`; if None, every profile uses `colour`.
+        """
         match plotSubject:
             case "profile":
-                self.add_3d_points_to_plot(get_profile_points_for_plot(profiles), colour, size)
+                if flat_colour is None:
+                    self.add_3d_points_to_plot(
+                        get_profile_points_for_plot(profiles, profile_step, point_step), colour, size)
+                else:
+                    self.add_3d_points_to_plot(
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=False), colour, size)
+                    self.add_3d_points_to_plot(
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=True), flat_colour, size)
             case "baseline":
                 self.add_lines_to_plot(line_points_from_floorSides(profiles), colour)
             case "widthPoints":
@@ -64,13 +82,17 @@ class plottingClass:
         pathPoints,tiltAngles = compute_print_path_and_angle(distances)
         
         #TODO: check how the real profiles are set (do they need to be inverted 180 deg?)
-        for i,prof in enumerate(points):
-            # rotate profile to match path direction
-            prof = prof @ self.rotation_matrices[i].T
-            
+        # Collect every profile's transformed points and add them as a single actor.
+        # One add_points call instead of one per profile is far faster for many profiles.
+        transformed = []
+        for i, prof in enumerate(points):
             if prof.shape[0] > 0:
-                cloud = pv.PolyData(pathPoints[i]+prof)
-                self.plotter.add_points(cloud, color = colour, point_size=point_size, render_points_as_spheres=False)
+                prof = prof @ self.rotation_matrices[i].T  # rotate to match path direction
+                transformed.append(pathPoints[i] + prof)
+
+        if transformed:
+            cloud = pv.PolyData(np.vstack(transformed))
+            self.plotter.add_points(cloud, color=colour, point_size=point_size, render_points_as_spheres=False)
             
     def add_lines_to_plot(self, linePoints, colour = 'green'):
         distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
@@ -90,9 +112,28 @@ class plottingClass:
                 self.plotter.add_mesh(line, color = colour, line_width=5) # size was 5
 
 
-def get_profile_points_for_plot(profiles: list[profileData]):
-    
-    return [np.column_stack((profile.x, profile.z, np.zeros_like(profile.x))) for profile in profiles]
+def get_profile_points_for_plot(profiles: list[profileData], profile_step: int = 1,
+                                point_step: int = 1, want_flat: bool | None = None):
+    """Build one (N, 3) point array per profile (height goes in the plot's y slot).
+
+    Returns one entry per profile so the result stays index-aligned with the print
+    path; skipped profiles (every profile not on profile_step) and empty profiles
+    contribute an empty (0, 3) array, which the plotter skips. point_step subsamples
+    points within each kept profile. If want_flat is set, only profiles whose `isFlat`
+    matches it are kept (None = no flatness filter).
+    """
+    points = []
+    for i, profile in enumerate(profiles):
+        include = i % profile_step == 0 and profile.x.shape[0] > 0
+        if want_flat is not None and bool(profile.isFlat) != want_flat:
+            include = False
+        if include:
+            xs = profile.x[::point_step]
+            zs = profile.z[::point_step]
+            points.append(np.column_stack((xs, zs, np.zeros_like(xs))))
+        else:
+            points.append(np.empty((0, 3)))
+    return points
 
 def line_points_from_floorSides(profiles: list[profileData]):
     linesPoints=[]

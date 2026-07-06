@@ -36,11 +36,12 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline and module map.
 
 ```
 Python/
-├── udpCapturing.py                       # ACTIVE  acquisition: sensor → HDF5
-├── LidarProfileAnalysis.py               # ACTIVE  entry point: load → process → plot
+├── rawProfileUdpCapturing.py                       # ACTIVE  acquisition: sensor → HDF5
+├── profileProcessing.py                    # ACTIVE  process entry point: raw → processed cache
+├── dataAnalysis.py                       # ACTIVE  plot entry point: load cache → 3D plot
 ├── profilePointsClass.py                 # ACTIVE  profileData dataclass + processing funcs
-├── profileLoading.py                     # MIXED   load_hdf5_profiles active; CSV loaders legacy
-├── plottingProfiles3D.py                 # ACTIVE  PyVista 3D plotting + print-path geometry
+├── profileLoading.py                     # MIXED   load_profiles/save_profiles active; CSV loaders legacy
+├── profile3Dplotting.py                 # ACTIVE  PyVista 3D plotting + print-path geometry
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
 ├── LidarProfileAnalysis_oldRegistration.py  # LEGACY  old entry point
 ├── HDf5data/  ProfileData/  Pics/        # data & outputs (git-ignored)
@@ -64,7 +65,7 @@ slot — that is a plotting detail, documented in ARCHITECTURE.md, not a data fi
 
 There are **two** distinct profile dataclasses — keep them separate:
 - `profilePointsClass.profileData` — the analysis model (`x`, `z`, derived fields).
-- `udpCapturing.ProfileDataRaw` — the wire/storage model (packet + measurement fields).
+- `rawProfileUdpCapturing.ProfileDataRaw` — the wire/storage model (packet + measurement fields).
 
 Be explicit about which one you mean. Do not merge them in a drive-by edit.
 
@@ -116,7 +117,7 @@ Units are roughly hundredths of a millimetre (the comments note "20 = 0.20 mm").
 
 - **Boundaries** (file I/O, UDP parsing, HDF5 reads) should fail loudly and
   specifically. Prefer catching concrete exceptions over bare `except Exception`.
-  The existing broad `except` in `udpCapturing.run_udp_listener` is known debt —
+  The existing broad `except` in `rawProfileUdpCapturing.run_udp_listener` is known debt —
   don't copy that pattern into new code.
 - **Pure processing functions** may assume valid numpy input but should guard the
   documented edge cases the code already handles (e.g. empty / too-short profiles:
@@ -129,7 +130,7 @@ Units are roughly hundredths of a millimetre (the comments note "20 = 0.20 mm").
 
 - New code should use the stdlib `logging` module, not `print`. Module-level
   `logger = logging.getLogger(__name__)`.
-- Existing `print` calls in `udpCapturing.py` are acceptable to leave; migrate
+- Existing `print` calls in `rawProfileUdpCapturing.py` are acceptable to leave; migrate
   them only when doing related work (tracked in [TODO.md](TODO.md)).
 - Log levels: `DEBUG` for per-packet/per-profile detail, `INFO` for lifecycle
   ("loaded N profiles"), `WARNING` for recoverable anomalies, `ERROR` for failures.
@@ -166,7 +167,7 @@ Units are roughly hundredths of a millimetre (the comments note "20 = 0.20 mm").
 
 - `profilePointsClass` is the **base layer** — it must not import other project
   modules. Keep it dependency-free internally.
-- Acquisition (`udpCapturing.py`) stays **standalone**. Don't couple it to the
+- Acquisition (`rawProfileUdpCapturing.py`) stays **standalone**. Don't couple it to the
   analysis modules.
 - One responsibility per module: loading, processing, plotting, registration,
   acquisition stay separate.
@@ -244,10 +245,13 @@ python -m venv .venv && .venv\Scripts\activate
 pip install -r requirements.txt
 
 # Run acquisition (sensor → HDF5)
-python udpCapturing.py
+python rawProfileUdpCapturing.py
 
-# Run the active analysis + 3D visualisation (needs a display)
-python LidarProfileAnalysis.py
+# Process raw profiles into the processed cache (run once / when params change)
+python profileProcessing.py
+
+# Run the 3D visualisation from the processed cache (needs a display)
+python dataAnalysis.py
 ```
 
 ### Build / test / lint (recommended, not yet wired up)

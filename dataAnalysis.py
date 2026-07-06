@@ -1,41 +1,24 @@
-import matplotlib.pyplot as plt
-import numpy as np
-from pathlib import Path
-import os
-import time
-import pyvista as pv
+import profile3Dplotting
+from profileLoading import load_profiles
 
-#from point_cloud_registration import ICP, PlaneICP, NDT, VPlaneICP
+# Plot-only entry point. Processing now lives in profileProcessing.py, which writes the
+# processed HDF5 cache that this script loads. Run profileProcessing.py first if the
+# cache is missing or the raw data / processing parameters have changed.
+PROCESSED_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercontentchangeExp2Sensor_processed.h5"
 
-import profileLoading
-import plottingProfiles3D
+# The full dataset is ~37M points, which makes interaction lag. Subsample the profile
+# cloud to keep rotate/zoom smooth: plot every PROFILE_STEP-th profile and every
+# POINT_STEP-th point (points drawn ≈ total / (PROFILE_STEP * POINT_STEP)). Increase
+# either if it still lags; set both to 1 to draw every point.
+PROFILE_STEP = 3
+POINT_STEP = 3
 
-from plottingProfiles3D import *
-from profilePointsClass import *
-from profileRegistration import *
+profiles = load_profiles(PROCESSED_FILE)
 
-#HDF5_FILE = "HDf5data/TestExperiments/udp_profiles_772profiles_same.h5"
-HDF5_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercontentchangeExp2Sensor.h5"
-profiles = profileLoading.load_hdf5_profiles(HDF5_FILE)
-
-profiles = profiles[0:2000]
-
-plotter = plottingProfiles3D.plottingClass(len(profiles))
-
-#plotter.plot(profiles,"profile",'blue')
-
-#plotter.plot(profiles,"baseline",'red')
-rotate_pointcloud(profiles)
-translate_floor_to_zero(profiles)
-find_smooth_slope(profiles)
-width_from_smoothed_slope(profiles)
-#find_border_points(profiles)
-
-plotter.plot(profiles,"profile", 'green')
-plotter.plot(profiles,"widthPoints", 'yellow',10)
-
-
-
+plotter = profile3Dplotting.plottingClass(len(profiles))
+# flat profiles (substrate only, no bead) are drawn red; the rest green
+plotter.plot(profiles, "profile", 'green', profile_step=PROFILE_STEP, point_step=POINT_STEP, flat_colour='red')
+plotter.plot(profiles, "widthPoints", 'yellow', 10)
 plotter.show()
 
 """
