@@ -40,11 +40,12 @@ The system has two halves that meet at an HDF5 file:
 | Module | Responsibility | Status |
 | ------ | -------------- | ------ |
 | `rawProfileUdpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileDataRaw`. | Active (standalone) |
-| `profilePointsClass.py` | Defines the analysis `profileData` dataclass **and** the free functions that operate on lists of it: rotate, level, smooth, width detection, border detection, baseline fit, moving average. The processing core. | Active |
+| `profilePointsClass.py` | Defines the analysis `profileData` dataclass **only** — the pure data model, no processing logic and no project imports. | Active |
+| `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, border detection, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`). Imports only `profilePointsClass`. | Active |
 | `profileLoading.py` | `load_profiles()` / `save_profiles()` — one generic pair that reads/writes `profileData` to HDF5, storing whichever fields are set (arrays → datasets, scalars → attributes). `load_profiles` also reads raw acquisition files (takes `x`/`z`, ignores sensor metadata). Also holds legacy CSV loaders/plotters (`loadProfiles`, `plotProfiles`, `groupProfiles`). | Mixed (loaders active, CSV legacy) |
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; computes the print path & per-profile tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
-| `profileProcessing.py` | **Entry point (process).** Load raw HDF5 → `process_profiles()` → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
+| `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
 | `dataAnalysis.py` | **Entry point (plot).** Load the processed cache → plot in 3D. No processing. | Active |
 | `LidarProfileAnalysis_oldRegistration.py` | Previous entry point built around the registration path. | Legacy |
 
@@ -52,26 +53,28 @@ The system has two halves that meet at an HDF5 file:
 
 ## 3. Module dependency graph
 
-All cross-module imports currently use `from <module> import *`.
+Legacy modules still use `from <module> import *`; newer/edited code uses explicit imports.
 
 ```
-        profilePointsClass        (no internal deps — the base layer)
-            ▲     ▲     ▲
-            │     │     └──────────────┐
-            │     │                    │
- profileRegistration        profile3Dplotting
-            ▲                          ▲
-            │                          │
-        profileLoading                 │
-            ▲   ▲                       │
-            │   └───────────┐          │
-            │               │          │
- profileProcessing      dataAnalysis (plot)
- (process entry)      └──────────────────┘
-                        depends on profile3Dplotting
+ profilePointsClass            base layer: profileData only, no project imports
+        ▲
+ profileProcessingAlgorithms   processing functions + FLATNESS_RMS_THRESHOLD
+        ▲                 ▲
+ profileLoading        profile3Dplotting
+        ▲   ▲              ▲
+        │   └──────┐       │
+ profileProcessing   dataAnalysis
+ (process entry:     (plot entry)
+  hosts process_profiles)
 
- rawProfileUdpCapturing  ── standalone, imports only stdlib + numpy + h5py
+ profileRegistration       LEGACY / dormant — imports profilePointsClass, off the active path
+ rawProfileUdpCapturing    standalone — imports only stdlib + numpy + h5py
 ```
+
+Edges: `profileProcessing` imports `profileLoading` + `profileProcessingAlgorithms`;
+`dataAnalysis` imports `profileLoading` + `profile3Dplotting`; `profileLoading` and
+`profile3Dplotting` each import `profileProcessingAlgorithms` (for `FLATNESS_RMS_THRESHOLD`
+and `get_baseline_from_profileBorder` respectively). No cycles.
 
 - `profilePointsClass` is the foundation; everything depends on it.
 - No circular imports exist today, but wildcard imports make the dependency

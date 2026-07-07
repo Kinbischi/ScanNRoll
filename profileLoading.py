@@ -7,7 +7,7 @@ import h5py
 from dataclasses import fields
 
 from profilePointsClass import *
-from profilePointsClass import FLATNESS_RMS_THRESHOLD  # explicit: used in load_profiles
+from profileProcessingAlgorithms import FLATNESS_RMS_THRESHOLD  # explicit: used in load_profiles
 
 
 # profileData fields that are bulky per-point intermediates recomputed by processing;
@@ -98,7 +98,7 @@ def load_profiles(fileName: str, start: int = 0, end: int | None = None) -> list
 
 
 
-
+# old plots to plot single profiles/ registration of 3 profiles
 def plotProfiles(profileGroups, noFloorPoints = True):
     fig, axes = plt.subplots(2, 3, figsize=(15.2, 7.5))
 

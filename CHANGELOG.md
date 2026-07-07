@@ -9,6 +9,14 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Changed
+- **Split `profilePointsClass` into data model + algorithms.** `profilePointsClass.py`
+  now holds only the `profileData` dataclass (a pure, dependency-free data model). The
+  processing functions (rotate/level/smooth/width/flatness/borders + `moving_average`,
+  `get_baseline_from_profileBorder`, `FLATNESS_RMS_THRESHOLD`) moved to a new
+  `profileProcessingAlgorithms.py`, which imports only `profilePointsClass`. The
+  `process_profiles` pipeline moved into the `profileProcessing.py` entry point. Import
+  sites updated (`profileLoading`, `profile3Dplotting`, `profileProcessing`);
+  `import scipy.signal` added so `find_peaks` no longer relies on side-effect imports.
 - **Process a profile range.** `profileProcessing.py` now takes `START_PROFILE` /
   `END_PROFILE` (index range, END exclusive) instead of `MAX_PROFILES`, and validates
   the range against a fast `count_profiles()` peek first — an out-of-range start or

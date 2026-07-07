@@ -39,7 +39,8 @@ Python/
 ├── rawProfileUdpCapturing.py                       # ACTIVE  acquisition: sensor → HDF5
 ├── profileProcessing.py                    # ACTIVE  process entry point: raw → processed cache
 ├── dataAnalysis.py                       # ACTIVE  plot entry point: load cache → 3D plot
-├── profilePointsClass.py                 # ACTIVE  profileData dataclass + processing funcs
+├── profilePointsClass.py                 # ACTIVE  profileData dataclass ONLY (pure data model)
+├── profileProcessingAlgorithms.py        # ACTIVE  processing algorithms (rotate/level/smooth/width/flatness)
 ├── profileLoading.py                     # MIXED   load_profiles/save_profiles active; CSV loaders legacy
 ├── profile3Dplotting.py                 # ACTIVE  PyVista 3D plotting + print-path geometry
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
@@ -165,8 +166,11 @@ Units are roughly hundredths of a millimetre (the comments note "20 = 0.20 mm").
 
 ## 10. Architectural principles
 
-- `profilePointsClass` is the **base layer** — it must not import other project
-  modules. Keep it dependency-free internally.
+- `profilePointsClass` is the **base layer** — it holds only the `profileData` data
+  model and must not import other project modules. Keep it dependency-free internally.
+- `profileProcessingAlgorithms` sits one layer up: pure processing functions that import
+  only `profilePointsClass`. The `process_profiles` pipeline that composes them lives in
+  the `profileProcessing.py` entry point.
 - Acquisition (`rawProfileUdpCapturing.py`) stays **standalone**. Don't couple it to the
   analysis modules.
 - One responsibility per module: loading, processing, plotting, registration,
@@ -181,10 +185,11 @@ Units are roughly hundredths of a millimetre (the comments note "20 = 0.20 mm").
 - **Search before you write.** Before adding a helper, grep for an existing one
   (baseline fitting, smoothing, peak finding, path geometry all already exist).
 - Baseline/floor estimation lives **only** in
-  `get_baseline_from_profileBorder` (`profilePointsClass.py`). Reuse it; do not
+  `get_baseline_from_profileBorder` (`profileProcessingAlgorithms.py`). Reuse it; do not
   reimplement a second baseline fit.
-- Smoothing goes through `moving_average`. Print-path/tilt geometry goes through
-  `compute_print_path_and_angle`. Don't fork these.
+- Smoothing goes through `moving_average` (`profileProcessingAlgorithms.py`). Print-path/
+  tilt geometry goes through `compute_print_path_and_angle` (`profile3Dplotting.py`).
+  Don't fork these.
 
 ---
 

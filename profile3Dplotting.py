@@ -2,22 +2,8 @@ import h5py
 import numpy as np
 import pyvista as pv
 from profilePointsClass import *
+from profileProcessingAlgorithms import get_baseline_from_profileBorder  # used in line_points_from_floorSides
 
-"""
-# artificial profile
-r = 5  # radius fake profile
-
-theta = np.linspace(0, np.pi/2, 100)  # half-circle in local profile coords
-xCircle = r * np.cos(theta)
-yCircle = r * np.sin(theta)
-xBox1 = np.linspace(0, -1*r, 50)
-yBox1 = np.ones_like(xBox1)*r
-xBox2 = np.repeat(-1*r, 50)
-yBox2 = np.linspace(1,0,50)*r
-x = np.concatenate((xCircle, xBox1, xBox2))
-y = np.concatenate((yCircle, yBox1, yBox2))
-points_3d = np.column_stack((x, y, np.zeros_like(x)))
-"""
 
 class plottingClass:
     def __init__(self, numOfprofiles):

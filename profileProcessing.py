@@ -7,7 +7,14 @@ of re-running the (heavy raw load +) processing pipeline every time.
 import logging
 
 from profileLoading import count_profiles, load_profiles, save_profiles
-from profilePointsClass import process_profiles
+from profilePointsClass import profileData
+from profileProcessingAlgorithms import (
+    flag_flat_profiles,
+    find_smooth_slope,
+    rotate_pointcloud,
+    translate_floor_to_zero,
+    width_from_smoothed_slope,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -17,8 +24,22 @@ PROCESSED_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercon
 
 # Process only the profiles in the index range [START_PROFILE:END_PROFILE) (0-based,
 # END exclusive). START_PROFILE = 0 and END_PROFILE = None processes everything.
-START_PROFILE = 50000
+START_PROFILE = 58000
 END_PROFILE = None
+
+
+def process_profiles(profiles: list[profileData]) -> list[profileData]:
+    """Run the full per-profile processing pipeline in place and return the list.
+
+    Order matters: level and rotate to the floor first, then smooth and measure
+    width on the levelled profile.
+    """
+    rotate_pointcloud(profiles)
+    translate_floor_to_zero(profiles)
+    find_smooth_slope(profiles)
+    width_from_smoothed_slope(profiles)
+    flag_flat_profiles(profiles)
+    return profiles
 
 
 def main() -> None:
