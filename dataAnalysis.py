@@ -1,96 +1,52 @@
+# %% Imports and configuration
+# Cell-based (# %%) plot workbench. Run cell-by-cell in VS Code's Interactive Window /
+# Jupyter (Shift+Enter), or as a plain script (`python dataAnalysis.py`) — the # %%
+# markers are ordinary comments. Processing lives in profileProcessing.py; this file only
+# loads and visualises. Run profileProcessing.py first if the processed cache is stale.
+import pyvista as pv
+
 import profile3Dplotting
 from profileLoading import load_profiles
 
-# Plot-only entry point. Processing now lives in profileProcessing.py, which writes the
-# processed HDF5 cache that this script loads. Run profileProcessing.py first if the
-# cache is missing or the raw data / processing parameters have changed.
+# In VS Code's Interactive Window / Jupyter, PyVista auto-detects the kernel and renders
+# a static (non-interactive) image (its 'trame' inline backend isn't installed). Forcing
+# notebook=False makes show() pop the native interactive desktop window instead (it blocks
+# the cell until you close the window). Harmless when run as a plain script. Install
+# trame + trame-vtk and use pv.set_jupyter_backend("trame") if you want interactive INLINE.
+pv.global_theme.notebook = False
+
+RAW_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercontentchangeExp2Sensor.h5"
 PROCESSED_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercontentchangeExp2Sensor_processed.h5"
 
-# The full dataset is ~37M points, which makes interaction lag. Subsample the profile
-# cloud to keep rotate/zoom smooth: plot every PROFILE_STEP-th profile and every
-# POINT_STEP-th point (points drawn ≈ total / (PROFILE_STEP * POINT_STEP)). Increase
-# either if it still lags; set both to 1 to draw every point.
-PROFILE_STEP = 3
-POINT_STEP = 3
+# Raw index range [START:END) for the "before" view (0-based, END exclusive; None -> end).
+# Keep this matching the range profileProcessing.py wrote to the cache so raw and
+# processed line up (needed for the overlay cell).
+START_PROFILE = 58000
+END_PROFILE = None
 
-profiles = load_profiles(PROCESSED_FILE)
-
-plotter = profile3Dplotting.plottingClass(len(profiles))
-# flat profiles (substrate only, no bead) are drawn red; the rest green
-plotter.plot(profiles, "profile", 'green', profile_step=PROFILE_STEP, point_step=POINT_STEP, flat_colour='red')
-plotter.plot(profiles, "widthPoints", 'yellow', 10)
-plotter.show()
-
-"""
-#profiles = profileLoading.loadProfiles()
-profileGroups = profileLoading.groupProfiles(profiles)
-
-# performed on every profile
-allShifts = []
-newX = []
-newY = []
-joinedProfiles = []
-for group in profileGroups:
-    for p in group:
-        p.rotate_pointcloud()
-        p.translate_floor_to_zero()
-        p.find_border_points()
-    
-    registerAndShiftProfiles(group)
-    nX,nY,pTesting = generateJoinedProfile(group)
-    joinedProfiles.append(pTesting)
-    newX.append(nX)
-    newY.append(nY)
+# 3D subsampling for the dense clouds: draw every PROFILE_STEP-th profile and every
+# POINT_STEP-th point (points drawn ~ total / (PROFILE_STEP * POINT_STEP)).
+PROFILE_STEP = 1
+POINT_STEP = 1
 
 
-# TODO:
-# make sure that points are sorted (along profile line) for area algo
+# %% Load raw ("before") and processed ("after") — both from files, no processing here
+# raw       : unprocessed x/z straight from the sensor HDF5 (not levelled)
+# processed : the levelled cache written by profileProcessing.py (peaks / width / isFlat)
+raw = load_profiles(RAW_FILE, START_PROFILE, END_PROFILE)
+processed = load_profiles(PROCESSED_FILE)
+print(f"{len(raw)} raw / {len(processed)} processed profiles")
 
 
-# TODO:
-# think of whether profileGroups should be class with obj joined profile
-# what obj belongs to groups what to profile
-# what do you need in terms of workflow? 
-# can profiles remain shifted --> yes, can we discard floor points -->?
-# you will anyways only use joinedprofile
+# %% 3D - overlay raw (grey) and processed (green) in one scene
+# Requires raw and processed to be the SAME profiles: keep START_PROFILE/END_PROFILE
+# matching the range profileProcessing.py wrote to the cache.
+assert len(raw) == len(processed), (
+    f"raw ({len(raw)}) and processed ({len(processed)}) differ; align START_PROFILE/"
+    "END_PROFILE with the range profileProcessing.py used."
+)
+pl = profile3Dplotting.plottingClass(len(raw))
+pl.plot(raw, "profile", "grey", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.plot(processed, "profile", "green", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.show()
 
-areaI =[]
-areaI2 =[]
-area1 = []
-area2 = []
-for group in profileGroups:
-    areaI.append(group[0].integrate_area())
-
-for j in joinedProfiles:
-    areaI2.append(j.integrate_area())
-    a1,a2 = j.shoelace_area()
-    area1.append(a1)
-    area2.append(a2)
-
-testP = joinedProfiles[0] #profiles[0]
-
-plt.ion()  # Turn on interactive mode
-fig, ax = plt.subplots()
-
-x_data = []
-y_data = []
-
-for x, y in zip(testP.x, testP.y):
-    x_data.append(x)
-    y_data.append(y)
-    
-    ax.clear()  # Clear previous frame
-    ax.plot(x_data, y_data, marker='x')
-    
-    ax.set_xlim(-40,40)
-    ax.set_ylim(-10, 40)
-    ax.set_title("Points appearing one by one")
-    
-    plt.draw()
-    plt.pause(0.05)  # Pause to create animation effect
-
-plt.ioff()
-plt.show()
-
-
-"""

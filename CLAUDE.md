@@ -38,7 +38,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline and module map.
 Python/
 ├── rawProfileUdpCapturing.py                       # ACTIVE  acquisition: sensor → HDF5
 ├── profileProcessing.py                    # ACTIVE  process entry point: raw → processed cache
-├── dataAnalysis.py                       # ACTIVE  plot entry point: load cache → 3D plot
+├── dataAnalysis.py                       # ACTIVE  plot workbench (# %% cells): load raw+cache → 3D plot
 ├── profilePointsClass.py                 # ACTIVE  profileData dataclass ONLY (pure data model)
 ├── profileProcessingAlgorithms.py        # ACTIVE  processing algorithms (rotate/level/smooth/width/flatness)
 ├── profileLoading.py                     # MIXED   load_profiles/save_profiles active; CSV loaders legacy

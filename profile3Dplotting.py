@@ -84,18 +84,21 @@ class plottingClass:
         distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
 
         pathPoints,tiltAngles = compute_print_path_and_angle(distances)
-        
-        for i in range(len(linePoints)):
-            p0 = linePoints[i][0]
-            p1 = linePoints[i][1]
-            # rotate profile to match path direction
-            rot_matrix = self.rotation_matrices[i]
-            p0 = p0 @ rot_matrix.T+pathPoints[i]    #rotate points and translate to path
-            p1 = p1 @ rot_matrix.T+pathPoints[i]
 
-            if p0.shape[0] > 0:
-                line = pv.Line(p0, p1)
-                self.plotter.add_mesh(line, color = colour, line_width=5) # size was 5
+        # Collect every line's two transformed endpoints and add them all as a single mesh.
+        # One add_mesh call instead of one per line is far faster for many profiles.
+        endpoints = []
+        for i in range(len(linePoints)):
+            rot_matrix = self.rotation_matrices[i]
+            p0 = np.asarray(linePoints[i][0], dtype=float) @ rot_matrix.T + pathPoints[i]  # rotate + translate to path
+            p1 = np.asarray(linePoints[i][1], dtype=float) @ rot_matrix.T + pathPoints[i]
+            endpoints.append(p0)
+            endpoints.append(p1)
+
+        if endpoints:
+            # points ordered as segment pairs (p0, p1, p0, p1, ...) -> one line per pair
+            lines = pv.line_segments_from_points(np.array(endpoints))
+            self.plotter.add_mesh(lines, color = colour, line_width=5) # size was 5
 
 
 def get_profile_points_for_plot(profiles: list[profileData], profile_step: int = 1,

@@ -46,7 +46,7 @@ The system has two halves that meet at an HDF5 file:
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; computes the print path & per-profile tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
-| `dataAnalysis.py` | **Entry point (plot).** Load the processed cache → plot in 3D. No processing. | Active |
+| `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: load raw ("before") and the processed cache ("after") from files, and plot flexibly in 3D (PyVista, native window) — raw, processed, and an overlay. No processing on this path (uses the cache, not `process_profiles`). | Active |
 | `LidarProfileAnalysis_oldRegistration.py` | Previous entry point built around the registration path. | Legacy |
 
 ---

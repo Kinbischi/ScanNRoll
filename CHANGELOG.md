@@ -9,6 +9,12 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Changed
+- **`dataAnalysis.py` is now a cell-based (`# %%`) plot workbench.** Runs cell-by-cell in
+  VS Code's Interactive Window / Jupyter (or as a plain script) with a native PyVista
+  window. Cells: load raw ("before") and the processed cache ("after") — both from files,
+  no processing on this path; 3D raw, 3D processed, and a raw/processed overlay (guarded
+  by an assert that the two line up). Dropped the old broken commented legacy block.
+  `plottingClass` and the loaders are reused unchanged.
 - **Split `profilePointsClass` into data model + algorithms.** `profilePointsClass.py`
   now holds only the `profileData` dataclass (a pure, dependency-free data model). The
   processing functions (rotate/level/smooth/width/flatness/borders + `moving_average`,
@@ -37,7 +43,10 @@ This project does not yet use formal version numbers; changes accumulate under
   (cache is ~30 MB vs ~810 MB raw; load ~1 s vs ~19 s; plot ~0.65 s vs ~14.7 s).
 - **Batched 3D plotting**: `plottingClass.add_3d_points_to_plot` now merges all
   profiles into a single PyVista actor per `plot()` call instead of one actor per
-  profile. Rendered output is unchanged.
+  profile. Rendered output is unchanged. `add_lines_to_plot` (the `"baseline"` layer)
+  was likewise batched into one `line_segments_from_points` mesh — it had kept the
+  per-line `add_mesh` anti-pattern, making the baseline layer ~103 s for 7151 profiles;
+  now ~0.5 s.
 - **Optional plot subsampling**: `plottingClass.plot` / `get_profile_points_for_plot`
   gained `profile_step` / `point_step` (default 1 = unchanged) to decimate the dense
   "profile" cloud so interaction stays smooth on large datasets. The full example
