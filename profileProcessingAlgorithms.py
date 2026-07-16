@@ -94,6 +94,44 @@ def rotate_pointcloud(profiles: list[profileData]):
         p.z = rotatedPoints[:,1]
 
 
+def rotate_and_shift_uniform(profiles: list[profileData]):
+    """Level all profiles with one representative (median) rotation and shift.
+
+    Applies the median per-profile tilt and floor offset to every profile, so the real
+    height differences between profiles are preserved (only a common tilt/offset removed).
+    Median is robust to the bad baseline fits of beaded profiles.
+    """
+    # median tilt angle across profiles (from each floor slope)
+    angles = []
+    for p in profiles:
+        if p.x.shape[0] < 10:  # too short for a reliable fit
+            continue
+        m, b = get_baseline_from_profileBorder(p.x, p.z)
+        angles.append(-np.arctan(m))  # sign matches rotate_pointcloud
+    angle = float(np.median(angles)) if angles else 0.0
+
+    c, s = np.cos(angle), np.sin(angle)
+    R = np.array([[c, -s], [s, c]])
+    for p in profiles:
+        pts = np.column_stack((p.x, p.z)) @ R.T
+        p.x = pts[:, 0]
+        p.z = pts[:, 1]
+
+    # median floor height across the now-rotated profiles
+    offsets = []
+    for p in profiles:
+        if p.x.shape[0] < 10:
+            continue
+        m, b = get_baseline_from_profileBorder(p.x, p.z)
+        offsets.append(b)
+    offset = float(np.median(offsets)) if offsets else 0.0
+    for p in profiles:
+        p.z = p.z - offset
+
+    print(f"rotate_and_shift_uniform: angle = {np.degrees(angle):.3f} deg, shift = {offset:.2f}")
+    return profiles
+
+
 #TODO: unit is currently: 20 is 0.20mm aka 200 microns --> change?
 def find_border_points(profiles: list[profileData]):
     for p in profiles:

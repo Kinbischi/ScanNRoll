@@ -11,6 +11,7 @@ from profilePointsClass import profileData
 from profileProcessingAlgorithms import (
     flag_flat_profiles,
     find_smooth_slope,
+    rotate_and_shift_uniform,
     rotate_pointcloud,
     translate_floor_to_zero,
     width_from_smoothed_slope,
@@ -34,11 +35,14 @@ def process_profiles(profiles: list[profileData]) -> list[profileData]:
     Order matters: level and rotate to the floor first, then smooth and measure
     width on the levelled profile.
     """
-    rotate_pointcloud(profiles)
-    translate_floor_to_zero(profiles)
-    find_smooth_slope(profiles)
-    width_from_smoothed_slope(profiles)
-    flag_flat_profiles(profiles)
+    # uniform: one median rotation + shift for all profiles (keeps relative heights)
+    rotate_and_shift_uniform(profiles)
+    # per-profile alternative (levels each profile's own floor to z=0):
+    #rotate_pointcloud(profiles)
+    #translate_floor_to_zero(profiles)
+    #find_smooth_slope(profiles)
+    #width_from_smoothed_slope(profiles)
+    #flag_flat_profiles(profiles)
     return profiles
 
 
