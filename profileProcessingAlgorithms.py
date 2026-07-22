@@ -1,10 +1,12 @@
 """Per-profile processing algorithms for LIDAR profiles.
 
 Pure functions that operate in place on lists of `profileData` (defined in
-profilePointsClass): rotate/level to the floor, smooth, measure width, flag
-flatness, detect border points, plus the shared `moving_average` and
+profilePointsClass): rotate/level to the floor, categorise floor/bead points, smooth,
+measure width, flag flatness, plus the shared `moving_average` and
 `get_baseline_from_profileBorder` helpers. The `process_profiles` pipeline in
 profileProcessing.py composes these in order.
+
+Units: x and z are in profile units where 1 unit = 0.01 mm (so 20 = 0.2 mm, 100 = 1 mm).
 """
 import numpy as np
 import scipy as sp
@@ -12,69 +14,113 @@ import scipy.signal  # ensure sp.signal.find_peaks is available without relying 
 
 from profilePointsClass import profileData
 
-# RMS residual of a straight-line fit to the whole profile, in profile units (~0.01 mm).
-# Below this a profile is "flat" (substrate only); above it a bead/curve is present.
-# Set in the valley of the bimodal distribution: the flat mode sits below ~200 and the
-# beaded mode above ~500. 250 separates them while still catching small/ramping beads
-# (e.g. the first profiles after a flat run, whose residuals cluster near 350-400 and
-# were wrongly marked flat at the previous threshold of 400).
-FLATNESS_RMS_THRESHOLD = 250
+# Profiles with fewer than this many points are too short for a reliable slope/width fit.
+MIN_PROFILE_POINTS = 10
 
-def flag_flat_profiles(profiles: list[profileData], threshold: float = FLATNESS_RMS_THRESHOLD) -> None:
-    """Label each profile flat or not by how well a straight line fits all its points.
+# RMS residual (profile units, ~0.01 mm) of a straight-line fit to the whole profile: below
+# this the profile is "flat" (substrate only), above it a bead is present. Set in the valley
+# of the bimodal flat/beaded residual distribution.
+FLATNESS_RMS_THRESHOLD = 350
 
-    A flat (substrate-only) profile is essentially a tilted line, so its line-fit RMS
-    residual is small; a printed bead deviates from any line, giving a large residual.
-    Sets `flatness` (the RMS residual) and `isFlat` (residual < threshold). Too-short
-    profiles are treated as flat (no detectable curve).
+def flag_flat_profiles(profiles: list[profileData], use_line_fit: bool = False,
+                       threshold: float = FLATNESS_RMS_THRESHOLD, max_bead_points: int = 0) -> None:
+    """Flag each profile as flat (substrate only) or not, setting `isFlat`.
+
+    Default (floor-based): flat when categorisation found essentially no bead points — at most
+    `max_bead_points` of them. Uses `floorMask`, so run categorize_floor_points +
+    grow_profile_points first; `flatness` is left None (it is a line-fit-only metric). With
+    use_line_fit=True the old method is used instead: a straight line is fit to all points and
+    `flatness` is set to the RMS residual (small for a substrate-only profile, large for a
+    bead), `isFlat` = residual < threshold. Too-short profiles are treated as flat.
     """
     for p in profiles:
-        if p.x.shape[0] < 10: # TODO empirical value
+        if p.x.shape[0] < MIN_PROFILE_POINTS:
             p.flatness = 0.0
             p.isFlat = True
             continue
-        coeffs, residuals, rank, singular_values, rcond = np.polyfit(p.x, p.z, 1, full=True)
-        rms = float(np.sqrt(residuals[0] / p.x.shape[0])) if residuals.size > 0 else 0.0
-        p.flatness = rms
-        p.isFlat = rms < threshold
+        if use_line_fit:
+            coeffs, residuals, rank, singular_values, rcond = np.polyfit(p.x, p.z, 1, full=True)
+            rms = float(np.sqrt(residuals[0] / p.x.shape[0])) if residuals.size > 0 else 0.0
+            p.flatness = rms
+            p.isFlat = rms < threshold
+        else:
+            bead_count = 0 if p.floorMask is None else int((~p.floorMask).sum())
+            p.flatness = None
+            p.isFlat = bead_count <= max_bead_points
 
-def find_smooth_slope(profiles: list[profileData]):
+# Cascaded box-smoothing windows (points): first smooth the height, then the |slope|.
+HEIGHT_SMOOTH_WINDOWS = (15, 9, 5, 5)
+SLOPE_SMOOTH_WINDOWS = (65, 55, 15, 5)
+# Peak detection on the smoothed |dz/dx| (each bead flank shows up as a peak):
+SLOPE_PEAK_MIN_HEIGHT = 0.15   # min smoothed-slope height to count as a flank peak
+SLOPE_PEAK_MIN_DISTANCE = 50   # min points between two peaks
+
+def find_smooth_slope(profiles: list[profileData]) -> None:
+    """Smooth each profile's height and its absolute slope |dz/dx|.
+
+    Cascaded box filters (moving_average) suppress noise so the two bead flanks stand out as
+    clean peaks in the slope. Sets `ySmooth` and `ySlopeSmooth`; width_from_smoothed_slope then
+    locates the flank peaks. Too-short profiles are skipped.
+    """
     for p in profiles:
-        if p.x.shape[0] < 10: # TODO empirical value
-            continue #too-short profile --> skip this one
-
-        p.ySlope = abs(np.gradient(p.z,p.x))
-
-        ySmooth = moving_average(p.z,15)
-        ySmooth = moving_average(ySmooth,9)
-        ySmooth = moving_average(ySmooth,5)
-        ySmooth = moving_average(ySmooth,5)
+        if p.x.shape[0] < MIN_PROFILE_POINTS:
+            continue
+        ySmooth = p.z
+        for window in HEIGHT_SMOOTH_WINDOWS:
+            ySmooth = moving_average(ySmooth, window)
         p.ySmooth = ySmooth
 
-        ySlopeSmooth = abs(np.gradient(ySmooth,p.x))
-        ySlopeSmooth = moving_average(ySlopeSmooth,65)
-        ySlopeSmooth = moving_average(ySlopeSmooth,55)
-        ySlopeSmooth = moving_average(ySlopeSmooth,15)
-        ySlopeSmooth = moving_average(ySlopeSmooth,5)
+        ySlopeSmooth = np.abs(np.gradient(ySmooth, p.x))
+        for window in SLOPE_SMOOTH_WINDOWS:
+            ySlopeSmooth = moving_average(ySlopeSmooth, window)
         p.ySlopeSmooth = ySlopeSmooth
 
-def width_from_smoothed_slope(profiles: list[profileData]):
-    for p in profiles:
-        if p.x.shape[0] < 10: # TODO empirical value
-            p.width = np.nan
-            continue #too-short profile --> skip this one
+def width_from_smoothed_slope(profiles: list[profileData]) -> None:
+    """Bead width from the two OUTERMOST slope peaks (furthest-left and furthest-right flanks).
 
-        p.peaks, properties = sp.signal.find_peaks(p.ySlopeSmooth,height=0.15,distance=50)
-        if len(p.peaks) != 2:
+    Any intermediate peaks (surface texture, a lumpy bead top) are ignored — the width spans the
+    extreme flanks. Sets `width` and `peaks` (the two outermost peak indices); NaN / None when
+    fewer than two peaks are found. Needs `ySlopeSmooth` from find_smooth_slope.
+    """
+    for p in profiles:
+        p.peaks = None
+        if p.ySlopeSmooth is None:          # too short, or find_smooth_slope not run
             p.width = np.nan
-        else:
-            p.width = np.round(abs(p.x[p.peaks[0]]-p.x[p.peaks[1]]), decimals=2)
+            continue
+        peaks, _ = sp.signal.find_peaks(p.ySlopeSmooth, height=SLOPE_PEAK_MIN_HEIGHT,
+                                        distance=SLOPE_PEAK_MIN_DISTANCE)
+        if peaks.size < 2:
+            p.width = np.nan
+            continue
+        left = peaks[np.argmin(p.x[peaks])]    # flank at smallest x
+        right = peaks[np.argmax(p.x[peaks])]   # flank at largest x
+        p.peaks = np.array([left, right])
+        p.width = float(np.round(abs(p.x[right] - p.x[left]), decimals=2))
+
+def width_from_bead_edges(profiles: list[profileData]) -> None:
+    """Bead width from the outer bead points: the x-span between the leftmost and rightmost
+    bead point (uses `floorMask`). Sets `beadWidth` and `beadWidthIdx` (the two point indices).
+    Run after grow_profile_points; NaN / None when a profile has fewer than two bead points.
+    """
+    for p in profiles:
+        if p.floorMask is None:
+            p.beadWidth = np.nan
+            p.beadWidthIdx = None
+            continue
+        bead_idx = np.flatnonzero(~p.floorMask)
+        if bead_idx.size < 2:
+            p.beadWidth = np.nan
+            p.beadWidthIdx = None
+            continue
+        left = int(bead_idx[np.argmin(p.x[bead_idx])])   # bead point at smallest x
+        right = int(bead_idx[np.argmax(p.x[bead_idx])])  # bead point at largest x
+        p.beadWidthIdx = np.array([left, right])
+        p.beadWidth = float(np.round(abs(p.x[right] - p.x[left]), decimals=2))
 
 def translate_floor_to_zero(profiles: list[profileData]):
     for p in profiles:
         m,b = get_baseline_from_profileBorder(p.x,p.z)
         p.z = p.z-b
-        p.x = p.x
     return profiles
 
 def rotate_pointcloud(profiles: list[profileData]):
@@ -104,7 +150,7 @@ def rotate_and_shift_uniform(profiles: list[profileData]):
     # median tilt angle across profiles (from each floor slope)
     angles = []
     for p in profiles:
-        if p.x.shape[0] < 10:  # too short for a reliable fit
+        if p.x.shape[0] < MIN_PROFILE_POINTS:  # too short for a reliable fit
             continue
         m, b = get_baseline_from_profileBorder(p.x, p.z)
         angles.append(-np.arctan(m))  # sign matches rotate_pointcloud
@@ -117,65 +163,146 @@ def rotate_and_shift_uniform(profiles: list[profileData]):
         p.x = pts[:, 0]
         p.z = pts[:, 1]
 
-    # median floor height across the now-rotated profiles
+    # median floor height across the now-rotated profiles; also store each profile's
+    # floor fit (m, b) so the baseline plot can reuse it instead of refitting
     offsets = []
     for p in profiles:
-        if p.x.shape[0] < 10:
+        if p.x.shape[0] < MIN_PROFILE_POINTS:  # too short for a reliable fit
+            p.m = p.b = None
             continue
         m, b = get_baseline_from_profileBorder(p.x, p.z)
+        p.m, p.b = m, b
         offsets.append(b)
     offset = float(np.median(offsets)) if offsets else 0.0
     for p in profiles:
         p.z = p.z - offset
+        if p.b is not None:
+            p.b -= offset  # keep the stored intercept in the final (shifted) coordinates
 
     print(f"rotate_and_shift_uniform: angle = {np.degrees(angle):.3f} deg, shift = {offset:.2f}")
     return profiles
 
 
-#TODO: unit is currently: 20 is 0.20mm aka 200 microns --> change?
-def find_border_points(profiles: list[profileData]):
+# z above this (~1 mm) seeds a confident bead point; at/below it is floor.
+FLOOR_POINT_THRESHOLD = 100
+# grow the bead into connected points down to this height (~0.2 mm); below stays floor.
+PROFILE_GROW_THRESHOLD = 20
+MIN_SEED_LENGTH = 3   # a bead core must span >= this many points (rejects lone spikes)
+PROFILE_FILL_GAP = 5  # fill interior floor gaps up to this many points to solidify the bead
+
+# Positional prior: the bead sits near the scan's middle, so points far from centre need more
+# height to count as bead (suppresses raised edge floor being mislabelled). The penalty is 0
+# within a central plateau, ramping to EDGE_HEIGHT_PENALTY at the edge; added to the seed and
+# grow thresholds. t = |x - centre| / half-width (0 = centre, 1 = edge).
+BEAD_CENTER_HALFWIDTH = 0.4   # central |t| with no penalty (real beads fade out by ~0.45)
+EDGE_HEIGHT_PENALTY = 400     # z units (~4 mm) added to the bead thresholds at the edge
+
+def position_height_penalty(x: np.ndarray) -> np.ndarray:
+    """Per-point height penalty (z units) rising from 0 in the centre to EDGE_HEIGHT_PENALTY
+    at the profile edges, so points far from the middle need more height to be classed as bead."""
+    lo, hi = float(np.min(x)), float(np.max(x))
+    half = 0.5 * (hi - lo)
+    if half == 0:
+        return np.zeros_like(x, dtype=float)
+    t = np.abs((x - 0.5 * (lo + hi)) / half)                          # 0 centre .. 1 edge
+    ramp = np.clip((t - BEAD_CENTER_HALFWIDTH) / (1.0 - BEAD_CENTER_HALFWIDTH), 0.0, 1.0)
+    return EDGE_HEIGHT_PENALTY * ramp
+
+def _categorization_height(p: profileData, use_profile_baseline: bool) -> np.ndarray:
+    """Point heights used for the floor/bead thresholds.
+
+    Default: the uniform (median) levelled z, which keeps the real height differences between
+    profiles (good for visualisation). With use_profile_baseline, heights are measured above
+    each profile's OWN floor fit (p.m, p.b) as z - (m*x + b), so every profile's floor sits at
+    0 regardless of how it deviates from the dataset median (removes residual per-profile tilt/
+    offset). Falls back to z when the profile has no stored fit.
+    """
+    if use_profile_baseline and p.m is not None and p.b is not None:
+        return p.z - (p.m * p.x + p.b)
+    return p.z
+
+def categorize_floor_points(profiles: list[profileData], threshold: float = FLOOR_POINT_THRESHOLD,
+                            use_profile_baseline: bool = False):
+    """Set floorMask (True = floor) by height plus a positional prior: floor where
+    height <= threshold + position penalty (edge points need more height to seed bead).
+
+    height is the uniform (median) levelled z by default, or each profile's own floor-relative
+    height when use_profile_baseline is set (see _categorization_height). Non-destructive,
+    vectorised. Pair with grow_profile_points (same flag) to add the bead flanks.
+    """
     for p in profiles:
-        borderPoints = np.empty(len(p.x), dtype=bool)
-        profilePoints = np.empty(len(p.z), dtype=bool)
-        for i in range(len(p.z)):
-            if p.z[i] > 20: # if height is lower than 0.2mm --> set to 0 --> assumed baseline
-                profilePoints[i] = True
-                borderPoints[i] = False
-            else:
-                profilePoints[i] = False
-                borderPoints[i] = True
-        p.borderPoints = np.array([p.x[borderPoints],p.z[borderPoints]])
-        p.x = p.x[profilePoints]
-        p.z = p.z[profilePoints]
+        height = _categorization_height(p, use_profile_baseline)
+        p.floorMask = height <= threshold + position_height_penalty(p.x)
+
+
+def _runs_at_least(mask: np.ndarray, min_len: int) -> np.ndarray:
+    """Keep only contiguous True runs of length >= min_len."""
+    out = np.zeros_like(mask)
+    idx = np.flatnonzero(mask)
+    if idx.size:
+        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+            if run.size >= min_len:
+                out[run] = True
+    return out
+
+
+def _fill_interior_gaps(bead: np.ndarray, max_gap: int) -> np.ndarray:
+    """Fill floor gaps <= max_gap that are flanked by bead on both sides."""
+    out = bead.copy()
+    idx = np.flatnonzero(~bead)
+    if idx.size:
+        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+            lo, hi = run[0], run[-1]
+            if 0 < lo and hi < bead.size - 1 and run.size <= max_gap and bead[lo - 1] and bead[hi + 1]:
+                out[run] = True
+    return out
+
+
+def grow_profile_points(profiles: list[profileData], low_threshold: float = PROFILE_GROW_THRESHOLD,
+                        min_seed_length: int = MIN_SEED_LENGTH, max_gap: int = PROFILE_FILL_GAP,
+                        use_profile_baseline: bool = False):
+    """Hysteresis: a run of points above the grow threshold touching a bead seed becomes bead.
+
+    Seeds shorter than min_seed_length are ignored (lone spikes); after growing, interior
+    floor gaps up to max_gap are filled. Recovers flanks and keeps the bead solid; isolated
+    low bumps and true floor stay floor. The grow threshold is raised toward the edges by the
+    positional prior, so the bead is not grown into raised edge floor. use_profile_baseline sets
+    the grow height basis; it is usually the same as categorize_floor_points's, but may differ
+    (seed on one basis, grow on another) — as configured in process_profiles. Assumes ordered
+    points. Updates floorMask.
+    """
+    for p in profiles:
+        if p.floorMask is None:
+            continue
+        seed = _runs_at_least(~p.floorMask, min_seed_length)   # bead cores, lone spikes dropped
+        candidate = _categorization_height(p, use_profile_baseline) > low_threshold + position_height_penalty(p.x)
+        bead = np.zeros(p.z.shape, dtype=bool)
+        if candidate.any():
+            idx = np.flatnonzero(candidate)
+            for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+                if seed[run].any():       # run touches a bead core -> whole run is bead
+                    bead[run] = True
+        p.floorMask = ~_fill_interior_gaps(bead, max_gap)
+
 
 def moving_average(arr, window_size):
     kernel = np.ones(window_size) / window_size
     return np.convolve(arr, kernel, mode='same')
 
-def get_baseline_from_profileBorder(x ,y, borderPoints=30):
-        n=borderPoints
-        profileBordersX = np.concatenate([x[:n], x[-n:]])
-        profileBordersY = np.concatenate([y[:n], y[-n:]])
+BASELINE_FIT_ITERS = 50  # lower-envelope passes; enough to descend past the curled edge
 
-        coeffs, residuals, rank, singular_values, rcond = np.polyfit(profileBordersX, profileBordersY, 1, full=True)
-        m=coeffs[0]
-        b=coeffs[1]
-        LSerror = np.sqrt(residuals[0])
+def get_baseline_from_profileBorder(x, y, borderPoints=150, iters=BASELINE_FIT_ITERS):
+    """Fit the floor line (m, b) from the border points, robust to the raised paper edge.
 
-        #if error is not low enough --> not both sides of the floor were caught
-        if LSerror > 50:        #take care --> this value depends on the unit (e.g. mm or um)
-            profileBordersX1 = x[:n]
-            profileBordersY1 = y[:n]
-            profileBordersX2 = x[-n:]
-            profileBordersY2 = y[-n:]
-            coeffs1, residuals1, rank, singular_values, rcond = np.polyfit(profileBordersX1, profileBordersY1, 1, full=True)
-            coeffs2, residuals2, rank, singular_values, rcond = np.polyfit(profileBordersX2, profileBordersY2, 1, full=True)
-
-            # set baseline at side with which gives lower least squares error
-            if residuals1 > residuals2:
-                m=coeffs2[0]
-                b=coeffs2[1]
-            else:
-                m=coeffs1[0]
-                b=coeffs1[1]
-        return m,b
+    Iterative lower-envelope: pull points above the current fit down onto it and refit, so
+    the line descends past the curled-up edge (and any bead intruding into the border) onto
+    the flat floor instead of averaging through them.
+    """
+    n = borderPoints
+    bx = np.concatenate([x[:n], x[-n:]])
+    work = np.concatenate([y[:n], y[-n:]]).astype(float)
+    m, b = np.polyfit(bx, work, 1)
+    for _ in range(iters):
+        work = np.minimum(work, m * bx + b)  # clip raised points down to the fit
+        m, b = np.polyfit(bx, work, 1)
+    return m, b

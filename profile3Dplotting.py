@@ -1,8 +1,6 @@
-import h5py
 import numpy as np
 import pyvista as pv
-from profilePointsClass import *
-from profileProcessingAlgorithms import get_baseline_from_profileBorder  # used in line_points_from_floorSides
+from profilePointsClass import profileData
 
 
 class plottingClass:
@@ -20,54 +18,54 @@ class plottingClass:
     def show(self):
         self.plotter.add_camera_orientation_widget()
         self.plotter.show()
-        
-        #TODO: add option for getting out smoothed profiles
-        # why are width points shifted?
-        # take border points out?
+
     def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5,
-             profile_step: int = 1, point_step: int = 1, flat_colour: str | None = None) -> None:
-        """Add one subject ("profile", "baseline", "widthPoints") to the 3D scene.
+             profile_step: int = 1, point_step: int = 1, flat_colour: str | None = None,
+             category: str | None = None, spheres: bool = False) -> None:
+        """Add one subject to the 3D scene: "profile", "baseline", "zeroBaseline",
+        "widthPoints" (slope-peak method, uses `peaks`), or "beadWidthPoints" (outer-bead-point
+        method, uses `beadWidthIdx`).
 
         profile_step / point_step subsample the dense "profile" cloud so interaction
         stays responsive on very large datasets: plot every profile_step-th profile and
-        every point_step-th point. Both default to 1 (plot everything). They have no
-        effect on "baseline" or "widthPoints".
+        every point_step-th point. Both default to 1 (plot everything) and only affect
+        "profile". size / spheres set point size and sphere rendering for the point subjects
+        (enlarge + spheres=True on the width markers so the chosen points stand out).
 
         flat_colour (profiles only): if set, profiles flagged `isFlat` are drawn in this
         colour and the rest in `colour`; if None, every profile uses `colour`.
+
+        category (profiles only): "floor" or "profile" draws only points of that category
+        (uses `floorMask`); None draws all points. Call twice with different category +
+        colour to show floor vs bead in two colours.
         """
         match plotSubject:
             case "profile":
                 if flat_colour is None:
                     self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step), colour, size)
+                        get_profile_points_for_plot(profiles, profile_step, point_step, category=category), colour, size)
                 else:
                     self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=False), colour, size)
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=False, category=category), colour, size)
                     self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=True), flat_colour, size)
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=True, category=category), flat_colour, size)
             case "baseline":
                 self.add_lines_to_plot(line_points_from_floorSides(profiles), colour)
+            case "zeroBaseline":
+                # flat z = 0 reference on each profile (the uniform leveling target)
+                self.add_lines_to_plot(line_points_from_zero(profiles), colour)
             case "widthPoints":
-                # one entry per profile so width points land on the correct path slot;
-                # profiles without two peaks get an empty (0, 3) array (skipped on plot)
-                widthPoints = []
-                for p in profiles:
-                    if p.peaks is not None and len(p.peaks) == 2:
-                        wp = np.array([[p.x[p.peaks[0]], p.z[p.peaks[0]], 0],
-                                       [p.x[p.peaks[1]], p.z[p.peaks[1]], 0]])
-                    else:
-                        wp = np.empty((0, 3))
-                    widthPoints.append(wp)
-                self.add_3d_points_to_plot(widthPoints, colour, size)
+                # slope-peak width method: mark the two peak points (from `peaks`)
+                self.add_3d_points_to_plot(width_point_arrays(profiles, "peaks"), colour, size, spheres=spheres)
+            case "beadWidthPoints":
+                # bead-edge width method: mark the two outer bead points (from `beadWidthIdx`)
+                self.add_3d_points_to_plot(width_point_arrays(profiles, "beadWidthIdx"), colour, size, spheres=spheres)
 
-    def add_3d_points_to_plot(self,points, colour = 'green', point_size=5):
+    def add_3d_points_to_plot(self,points, colour = 'green', point_size=5, spheres=False):
         distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
-        #totalDistances = np.cumsum(distances)
 
         pathPoints,tiltAngles = compute_print_path_and_angle(distances)
-        
-        #TODO: check how the real profiles are set (do they need to be inverted 180 deg?)
+
         # Collect every profile's transformed points and add them as a single actor.
         # One add_points call instead of one per profile is far faster for many profiles.
         transformed = []
@@ -78,7 +76,7 @@ class plottingClass:
 
         if transformed:
             cloud = pv.PolyData(np.vstack(transformed))
-            self.plotter.add_points(cloud, color=colour, point_size=point_size, render_points_as_spheres=False)
+            self.plotter.add_points(cloud, color=colour, point_size=point_size, render_points_as_spheres=spheres)
             
     def add_lines_to_plot(self, linePoints, colour = 'green'):
         distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
@@ -98,18 +96,20 @@ class plottingClass:
         if endpoints:
             # points ordered as segment pairs (p0, p1, p0, p1, ...) -> one line per pair
             lines = pv.line_segments_from_points(np.array(endpoints))
-            self.plotter.add_mesh(lines, color = colour, line_width=5) # size was 5
+            self.plotter.add_mesh(lines, color = colour, line_width=5)
 
 
 def get_profile_points_for_plot(profiles: list[profileData], profile_step: int = 1,
-                                point_step: int = 1, want_flat: bool | None = None):
+                                point_step: int = 1, want_flat: bool | None = None,
+                                category: str | None = None):
     """Build one (N, 3) point array per profile (height goes in the plot's y slot).
 
     Returns one entry per profile so the result stays index-aligned with the print
     path; skipped profiles (every profile not on profile_step) and empty profiles
     contribute an empty (0, 3) array, which the plotter skips. point_step subsamples
     points within each kept profile. If want_flat is set, only profiles whose `isFlat`
-    matches it are kept (None = no flatness filter).
+    matches it are kept (None = no flatness filter). If category is "floor" or "profile",
+    only points of that category are kept (uses `floorMask`; ignored when it is None).
     """
     points = []
     for i, profile in enumerate(profiles):
@@ -117,22 +117,55 @@ def get_profile_points_for_plot(profiles: list[profileData], profile_step: int =
         if want_flat is not None and bool(profile.isFlat) != want_flat:
             include = False
         if include:
-            xs = profile.x[::point_step]
-            zs = profile.z[::point_step]
+            xs, zs = profile.x, profile.z
+            if category is not None and profile.floorMask is not None:
+                keep = profile.floorMask if category == "floor" else ~profile.floorMask
+                xs, zs = xs[keep], zs[keep]
+            xs = xs[::point_step]
+            zs = zs[::point_step]
             points.append(np.column_stack((xs, zs, np.zeros_like(xs))))
         else:
             points.append(np.empty((0, 3)))
     return points
 
-def line_points_from_floorSides(profiles: list[profileData]):
-    linesPoints=[]
+def width_point_arrays(profiles: list[profileData], idx_attr: str):
+    """One (2, 3) point array per profile from a 2-index attribute ("peaks" or "beadWidthIdx").
+
+    One entry per profile keeps alignment with the print path; a profile without exactly two
+    indices contributes an empty (0, 3) array (skipped on plot).
+    """
+    out = []
     for p in profiles:
-        m,b = get_baseline_from_profileBorder(p.x,p.z)
-        p0=(p.x[0],m*p.x[0]+b,0)
-        p1=(p.x[-1],m*p.x[-1]+b,0)
-        
-        linesPoints.append((p0,p1))
+        idx = getattr(p, idx_attr)
+        if idx is not None and len(idx) == 2:
+            i0, i1 = int(idx[0]), int(idx[1])
+            out.append(np.array([[p.x[i0], p.z[i0], 0], [p.x[i1], p.z[i1], 0]]))
+        else:
+            out.append(np.empty((0, 3)))
+    return out
+
+def line_points_from_floorSides(profiles: list[profileData]):
+    """Endpoints of each profile's floor baseline from its stored fit (m, b).
+
+    Reuses the fit cached by rotate_and_shift_uniform (no refit here). One entry per
+    profile keeps alignment with the print path; a missing fit falls back to z = 0.
+    """
+    linesPoints = []
+    for p in profiles:
+        m = p.m if p.m is not None else 0.0
+        b = p.b if p.b is not None else 0.0
+        p0 = (p.x[0], m * p.x[0] + b, 0)
+        p1 = (p.x[-1], m * p.x[-1] + b, 0)
+        linesPoints.append((p0, p1))
     return linesPoints
+
+def line_points_from_zero(profiles: list[profileData]):
+    """Endpoints of the flat z = 0 line on every profile (the uniform leveling target).
+
+    One entry per profile keeps alignment with the print path. Height (z) goes in the
+    plot's y slot, so a levelled floor sitting at z = 0 lines up with this reference.
+    """
+    return [((p.x[0], 0.0, 0), (p.x[-1], 0.0, 0)) for p in profiles]
 
 #TODO: currently, print path is in xz plane and profile height in y plane
 # --> this is confusing --> change profile output to y for height

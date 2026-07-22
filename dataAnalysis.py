@@ -38,7 +38,7 @@ processed = load_profiles(PROCESSED_FILE)
 print(f"{len(raw)} raw / {len(processed)} processed profiles")
 
 
-# %% 3D - overlay raw (grey) and processed (green) in one scene
+# %% 3D - overlay raw (grey), processed (green), floor baselines (red), z=0 reference (yellow)
 # Requires raw and processed to be the SAME profiles: keep START_PROFILE/END_PROFILE
 # matching the range profileProcessing.py wrote to the cache.
 assert len(raw) == len(processed), (
@@ -48,5 +48,32 @@ assert len(raw) == len(processed), (
 pl = profile3Dplotting.plottingClass(len(raw))
 pl.plot(raw, "profile", "grey", profile_step=PROFILE_STEP, point_step=POINT_STEP)
 pl.plot(processed, "profile", "green", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.plot(processed, "baseline", "red")  # fitted floor lines from stored m/b (reprocess cache to populate)
+pl.plot(processed, "zeroBaseline", "yellow")  # z=0 reference (uniform leveling target) for the floor/bead split
+pl.show()
+
+
+# %% 3D - points coloured by category: floor (brown) vs profile/bead (green)
+# floorMask comes from the cache (categorize_floor_points runs in the pipeline).
+pl = profile3Dplotting.plottingClass(len(processed))
+pl.plot(processed, "profile", "saddlebrown", category="floor", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.show()
+
+
+# %% 3D - profile (bead) points only, floor removed
+pl = profile3Dplotting.plottingClass(len(processed))
+pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.show()
+
+
+# %% 3D - bead points with both width methods marked (needs a reprocessed cache)
+# widthPoints (slope-peak method) in red, beadWidthPoints (outer bead points) in blue — both
+# enlarged and sphere-rendered so the two chosen points stand out. The marker indices come from
+# find_smooth_slope + width_from_smoothed_slope (peaks) and width_from_bead_edges (beadWidthIdx).
+pl = profile3Dplotting.plottingClass(len(processed))
+pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.plot(processed, "widthPoints", "red", size=15, spheres=True)       # slope-peak method
+pl.plot(processed, "beadWidthPoints", "blue", size=15, spheres=True)  # outer-bead-point method
 pl.show()
 

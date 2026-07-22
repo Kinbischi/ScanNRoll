@@ -1,5 +1,4 @@
 import numpy as np
-import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -9,17 +8,18 @@ class profileData:
     x: np.ndarray
     z: np.ndarray
 
-    # currently unused
+    # floor baseline fit (slope, intercept) of the levelled profile, set by
+    # rotate_and_shift_uniform and reused to draw the baseline (line_points_from_floorSides)
     m: Optional[float] = None
     b: Optional[float] = None
 
-    profileNumber: Optional[int] = None
-    borderPoints: Optional[np.ndarray] = None
-    ySlope: Optional[np.ndarray] = None
+    floorMask: Optional[np.ndarray] = None  # per-point bool: True = floor point, False = profile (bead)
     ySmooth: Optional[np.ndarray] = None
     ySlopeSmooth: Optional[np.ndarray] = None
     peaks: Optional[np.ndarray] = None
     width: Optional[float] = None
+    beadWidthIdx: Optional[np.ndarray] = None  # indices of the two outer bead points (bead-edge width)
+    beadWidth: Optional[float] = None          # x-span between the two outer bead points
     isFlat: Optional[bool] = None
     flatness: Optional[float] = None
     area: Optional[float] = None
@@ -29,13 +29,6 @@ class profileData:
     maxSmoothedPlace: Optional[int] = None
     maxHeight: Optional[float] = None
     maxPlace: Optional[int] = None
-
-    #TODO: profileNumber not correctly taken
-    def __post_init__(self):
-        profileNumberMatch = re.search(r"profile_(\d{1})", self.name)
-        if profileNumberMatch:
-            self.profileNumber = int(profileNumberMatch.group(1))
-
 
     """
     # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")

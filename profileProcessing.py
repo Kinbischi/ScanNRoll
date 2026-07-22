@@ -9,11 +9,12 @@ import logging
 from profileLoading import count_profiles, load_profiles, save_profiles
 from profilePointsClass import profileData
 from profileProcessingAlgorithms import (
-    flag_flat_profiles,
+    categorize_floor_points,
     find_smooth_slope,
+    flag_flat_profiles,
+    grow_profile_points,
     rotate_and_shift_uniform,
-    rotate_pointcloud,
-    translate_floor_to_zero,
+    width_from_bead_edges,
     width_from_smoothed_slope,
 )
 
@@ -28,6 +29,13 @@ PROCESSED_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercon
 START_PROFILE = 58000
 END_PROFILE = None
 
+# Floor/bead categorisation height basis, chosen separately for the seed and grow steps.
+# True: use each profile's OWN floor fit (floor sits at 0, robust to per-profile tilt/offset).
+# False: use the uniform median-levelled height. The DATA stays median-levelled either way
+# (relative heights kept for visualisation); only the categorisation height basis changes.
+SEED_USE_PROFILE_BASELINE = True   # categorize_floor_points
+GROW_USE_PROFILE_BASELINE = False  # grow_profile_points
+
 
 def process_profiles(profiles: list[profileData]) -> list[profileData]:
     """Run the full per-profile processing pipeline in place and return the list.
@@ -37,12 +45,16 @@ def process_profiles(profiles: list[profileData]) -> list[profileData]:
     """
     # uniform: one median rotation + shift for all profiles (keeps relative heights)
     rotate_and_shift_uniform(profiles)
-    # per-profile alternative (levels each profile's own floor to z=0):
-    #rotate_pointcloud(profiles)
-    #translate_floor_to_zero(profiles)
-    #find_smooth_slope(profiles)
-    #width_from_smoothed_slope(profiles)
-    #flag_flat_profiles(profiles)
+    # seed floor vs bead points, then grow the bead into its connected lower flanks
+    categorize_floor_points(profiles, use_profile_baseline=SEED_USE_PROFILE_BASELINE)
+    grow_profile_points(profiles, use_profile_baseline=GROW_USE_PROFILE_BASELINE)
+    flag_flat_profiles(profiles)  # flat = no bead points (uses floorMask; set after grow)
+    # width, two ways: slope-peak method (needs the smoothed slope) and outer-bead-point method
+    find_smooth_slope(profiles)
+    width_from_smoothed_slope(profiles)  # -> peaks, width
+    width_from_bead_edges(profiles)      # -> beadWidthIdx, beadWidth
+    # Optional steps in profileProcessingAlgorithms (import + call to enable): rotate_pointcloud
+    # + translate_floor_to_zero (per-profile levelling).
     return profiles
 
 
