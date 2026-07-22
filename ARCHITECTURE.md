@@ -12,16 +12,14 @@ before changing anything. For the conventions to follow when changing it, see
 The system has two halves that meet at an HDF5 file:
 
 ```
- ┌─────────────┐     UDP      ┌──────────────────┐    HDF5    ┌────────────────────────┐
- │ Baumer OX200│ ───────────► │  rawProfileUdpCapturing.py │ ─────────► │  HDf5data/*.h5         │
- │   sensor    │   packets    │  (acquisition)   │   write    │  (profile store)       │
- └─────────────┘              └──────────────────┘            └───────────┬────────────┘
-                                                                          │ read
-                                                                          ▼
-                                                       ┌──────────────────────────────────┐
-                                                       │     dataAnalysis.py       │
-                                                       │  load → process → measure → plot  │
-                                                       └──────────────────────────────────┘
+ Baumer OX200 ──UDP──►  rawProfileUdpCapturing.py  ──►  HDf5data/*.h5  (raw profile store)
+   sensor              (acquisition, standalone)                  │ read
+                                                                  ▼
+                        profileProcessing.py  ──────►  *_processed.h5  (small processed cache)
+                        (process once: level →                    │ read
+                         categorise floor/bead → width)           ▼
+                                                            dataAnalysis.py
+                                                            (plot workbench: cache → 3D)
 ```
 
 - **Acquisition** (`rawProfileUdpCapturing.py`) is standalone: it shares no imports with the
@@ -41,8 +39,8 @@ The system has two halves that meet at an HDF5 file:
 | ------ | -------------- | ------ |
 | `rawProfileUdpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileDataRaw`. | Active (standalone) |
 | `profilePointsClass.py` | Defines the analysis `profileData` dataclass **only** — the pure data model, no processing logic and no project imports. | Active |
-| `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, border detection, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`). Imports only `profilePointsClass`. | Active |
-| `profileLoading.py` | `load_profiles()` / `save_profiles()` — one generic pair that reads/writes `profileData` to HDF5, storing whichever fields are set (arrays → datasets, scalars → attributes). `load_profiles` also reads raw acquisition files (takes `x`/`z`, ignores sensor metadata). Also holds legacy CSV loaders/plotters (`loadProfiles`, `plotProfiles`, `groupProfiles`). | Mixed (loaders active, CSV legacy) |
+| `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, floor/bead categorisation, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`). Imports only `profilePointsClass`. | Active |
+| `profileLoading.py` | `load_profiles()` / `save_profiles()` — one generic pair that reads/writes `profileData` to HDF5, storing whichever fields are set (arrays → datasets, scalars → attributes). `load_profiles` also reads raw acquisition files (takes `x`/`z`, ignores sensor metadata). | Active |
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; computes the print path & per-profile tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
@@ -56,29 +54,30 @@ The system has two halves that meet at an HDF5 file:
 Legacy modules still use `from <module> import *`; newer/edited code uses explicit imports.
 
 ```
- profilePointsClass            base layer: profileData only, no project imports
-        ▲
- profileProcessingAlgorithms   processing functions + FLATNESS_RMS_THRESHOLD
-        ▲                 ▲
- profileLoading        profile3Dplotting
-        ▲   ▲              ▲
-        │   └──────┐       │
- profileProcessing   dataAnalysis
- (process entry:     (plot entry)
-  hosts process_profiles)
+ profilePointsClass          base layer — the profileData model only, no project imports
+   ▲    ▲    ▲
+   │    │    └── profile3Dplotting           PyVista plotting (imports profilePointsClass only)
+   │    └─────── profileProcessingAlgorithms processing fns + FLATNESS_RMS_THRESHOLD
+   │                   ▲
+   └── profileLoading ─┘                     HDF5 I/O (also imports FLATNESS_RMS_THRESHOLD)
 
- profileRegistration       LEGACY / dormant — imports profilePointsClass, off the active path
+ Entry points compose the above:
+   profileProcessing → profileLoading + profileProcessingAlgorithms   (process; hosts process_profiles)
+   dataAnalysis      → profileLoading + profile3Dplotting             (plot workbench)
+
+ profileRegistration       LEGACY / dormant — imports profilePointsClass (wildcard), off active path
  rawProfileUdpCapturing    standalone — imports only stdlib + numpy + h5py
 ```
 
-Edges: `profileProcessing` imports `profileLoading` + `profileProcessingAlgorithms`;
-`dataAnalysis` imports `profileLoading` + `profile3Dplotting`; `profileLoading` and
-`profile3Dplotting` each import `profileProcessingAlgorithms` (for `FLATNESS_RMS_THRESHOLD`
-and `get_baseline_from_profileBorder` respectively). No cycles.
+Edges: `profileProcessingAlgorithms`, `profileLoading`, and `profile3Dplotting` each import
+`profilePointsClass`; `profileLoading` also imports `profileProcessingAlgorithms`
+(`FLATNESS_RMS_THRESHOLD`). The entry points compose these: `profileProcessing` imports
+`profileLoading` + `profileProcessingAlgorithms`; `dataAnalysis` imports `profileLoading` +
+`profile3Dplotting`. `profile3Dplotting` depends on `profilePointsClass` only. No cycles.
 
 - `profilePointsClass` is the foundation; everything depends on it.
-- No circular imports exist today, but wildcard imports make the dependency
-  surface implicit and fragile (any new top-level name leaks everywhere).
+- The active analysis modules now use **explicit** imports; only the dormant
+  `profileRegistration.py` still uses `from x import *`.
 
 ---
 
@@ -106,16 +105,31 @@ plotter.plot(profiles, "widthPoints", …) # mark width peaks
 plotter.show()                           # interactive PyVista window
 ```
 
-`process_profiles()` runs the steps in order: `rotate_pointcloud` (flatten via
-baseline angle) → `translate_floor_to_zero` (subtract baseline offset) →
-`find_smooth_slope` → `width_from_smoothed_slope` → `flag_flat_profiles` (sets
-`isFlat`/`flatness` from the whole-profile line-fit residual). The plot step draws
-flat profiles red via `plot(..., flat_colour='red')`.
+`process_profiles()` runs these steps in order:
 
-Key processing detail: `find_smooth_slope` applies a **cascade of moving averages**
-to `z`, takes the gradient, then smooths the gradient again; `width_from_smoothed_slope`
-runs `scipy.signal.find_peaks` on that smoothed slope and reports the x-distance
-between exactly two peaks (otherwise `width = NaN`).
+1. `rotate_and_shift_uniform` — level **all** profiles by one **median** rotation + shift
+   (derived from each profile's floor fit), preserving the real height differences between
+   profiles. Also stores each profile's own floor fit in `m`/`b`.
+2. `categorize_floor_points` — per-point `floorMask` (floor vs bead) by height, with a symmetric
+   **positional prior** (points far from the scan centre need more height to count as bead).
+3. `grow_profile_points` — hysteresis: grow the bead from confident seeds into their connected
+   lower flanks, then fill small interior gaps.
+4. `flag_flat_profiles` — mark a profile flat when it has **no bead points** (floor only). The
+   old line-fit-residual method is kept behind `use_line_fit=True`.
+5. `find_smooth_slope` → `width_from_smoothed_slope` — bead width from the two **outermost**
+   smoothed-slope peaks (the flanks).
+6. `width_from_bead_edges` — bead width the other way: the x-span between the outer bead points.
+
+The plot workbench (`dataAnalysis.py`) draws floor vs bead in two colours (`category=`), flat
+profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
+(`"baseline"` / `"zeroBaseline"`), and both width methods' points (`"widthPoints"` /
+`"beadWidthPoints"`).
+
+Key detail: `find_smooth_slope` cascades box filters (`moving_average`) over `z`, takes the
+gradient, and smooths it again; `width_from_smoothed_slope` runs `scipy.signal.find_peaks` on
+that smoothed slope and spans the **outermost** peaks — intermediate peaks are ignored (`NaN`
+only when fewer than two peaks). The per-profile alternative (`rotate_pointcloud` +
+`translate_floor_to_zero`) is kept but dormant.
 
 ### 4.2 Acquisition pipeline (`rawProfileUdpCapturing.py`)
 
@@ -136,9 +150,10 @@ arrives.
 
 ### 4.3 Legacy registration pipeline (`LidarProfileAnalysis_oldRegistration.py`)
 
-`loadProfiles()` (CSV) → `groupProfiles()` → per group: rotate / level / find borders →
-`registerAndShiftProfiles()` → `generateJoinedProfile()` → area calculations.
-**Dormant** and depends on a `.y` attribute the current `profileData` no longer has.
+Per group: rotate / level → `registerAndShiftProfiles()` → `generateJoinedProfile()` →
+area calculations. **Dormant** — depends on a `.y` attribute the current `profileData` no
+longer has, and the CSV loaders it used (`loadProfiles`/`groupProfiles`) were removed in the
+cleanup.
 
 ---
 
@@ -171,14 +186,17 @@ analysis side.
 A second, much smaller HDF5 holds the *processed* result so plotting can skip the raw
 load and the processing pipeline. Same `profile_NNNNNN` group layout:
 
-- Datasets: `x`, `z` (rotated + levelled coordinates), `peaks` (slope-peak indices).
-- Attributes: `name`, `width` (NaN when not exactly two peaks), `isFlat` (bool),
-  `flatness` (line-fit RMS residual), `profileNumber`.
+- Datasets: `x`, `z` (rotated + levelled coordinates), `peaks` (the two outermost slope-peak
+  indices), `beadWidthIdx` (the two outer bead-point indices).
+- Attributes: `name`, `width` (slope-peak method, NaN when < 2 peaks), `beadWidth` (bead-edge
+  method), `isFlat` (bool), `flatness` (line-fit RMS residual; None for the default floor-based
+  flat method).
 - File attributes: `kind = "processed"`, `source_file` (the raw path) for provenance.
 
-`flatness` is the threshold-independent metric; `load_profiles` re-derives
-`isFlat = flatness < FLATNESS_RMS_THRESHOLD` on load, so the flat/curved cutoff can be
-retuned without reprocessing the cache.
+The default (floor-based) flat method caches `isFlat` directly and leaves `flatness` unset;
+`load_profiles` only re-derives `isFlat = flatness < FLATNESS_RMS_THRESHOLD` for the optional
+line-fit method (`flag_flat_profiles(use_line_fit=True)`), which stores an RMS `flatness` — so
+that cutoff can be retuned without reprocessing.
 
 Smoothed arrays (`ySmooth`, `ySlopeSmooth`) are intermediates and are **not** stored;
 a future "plot smoothed profile" option would need them added. Example sizes: a
@@ -193,14 +211,14 @@ Severity is relative to *current* behaviour. Full remediation backlog in
 
 | # | Issue | Risk |
 | - | ----- | ---- |
-| 1 | **`.y` vs `.z` mismatch.** `profileRegistration.py`, `profileLoading.py` (`plotProfiles`/`loadProfiles`) and the commented block in `dataAnalysis.py` read `.y`, but `profileData` only defines `x`/`z`. | High *(latent)* — does not affect the active path, but the registration pipeline will `AttributeError` the moment it is re-enabled. |
+| 1 | **`.y` vs `.z` mismatch.** `profileRegistration.py` reads `.y`, but `profileData` only defines `x`/`z`. | High *(latent)* — does not affect the active path, but the registration pipeline will `AttributeError` the moment it is re-enabled. |
 | 2 | ~~**Name collision** between the wire-format `ProfileData` (`rawProfileUdpCapturing.py`) and analysis `profileData` (`profilePointsClass.py`).~~ **Resolved:** the wire-format class is now `ProfileDataRaw`. | — |
-| 3 | **Wildcard imports** (`from x import *`) across all analysis modules. | Medium — hidden coupling, namespace leakage, hard to trace symbol origins. |
-| 4 | **Magic constants** scattered and undocumented: smoothing windows `15/9/5/5/65/55/15/5`, peak `height=0.15, distance=50`, border threshold `20`, baseline `borderPoints=30` & error `50`, path geometry `2000/5000/80000`, UDP address/port, parser byte offsets. | Medium — tuning is opaque; values are unit-dependent (≈ 0.01 mm units). |
-| 5 | **Dead code & unused imports**: large commented blocks in three modules; unused `copy`, `NearestNeighbors`, `pyvista` (in the class module); unused `loadProfiles`/`plotProfiles`. | Low — clutter, risk of "fixing" code that never runs. |
+| 3 | **Wildcard imports** (`from x import *`) — now confined to the dormant `profileRegistration.py`; the active analysis modules use explicit imports. | Low — limited to off-path legacy code. |
+| 4 | **Magic constants** — many are now named in `profileProcessingAlgorithms.py` (`MIN_PROFILE_POINTS`, `FLOOR_POINT_THRESHOLD`, the positional-prior, slope-peak and smoothing-window constants). Still un-named: path geometry `2000/5000/80000` (`profile3Dplotting.py`), the UDP address/port and parser byte offsets (`rawProfileUdpCapturing.py`). Values are unit-dependent (1 unit ≈ 0.01 mm). | Medium — a shared `config` module is still wanted for the rest. |
+| 5 | **Dead code & unused imports** (active pipeline cleared): the CSV loaders, `find_border_points`, the `borderPoints` field, and unused imports were removed. Remaining is out-of-scope legacy (`profileRegistration.py`); the `profilePointsClass.py` area/max-height block is intentionally kept for later. | Low — clutter, risk of "fixing" code that never runs. |
 | 6 | **Missing type hints & docstrings** on most module-level functions. | Low/Medium — slows comprehension; no static-analysis safety net. |
 | 7 | **No error handling at boundaries**: HDF5 load assumes well-formed files; UDP parser uses a broad `except Exception` and unbounded buffering dicts. | Medium — silent data loss / memory growth on malformed or out-of-order packets. |
-| 8 | **Hardcoded paths & IP** in entry scripts and `loadProfiles()`. | Low — non-portable; blocks reuse on another machine. |
+| 8 | **Hardcoded paths & IP** in the entry scripts. | Low — non-portable; blocks reuse on another machine. |
 | 9 | **No tests, lint, or type-check config.** | Medium — refactors are unguarded as the codebase grows. |
 | 10 | ~~**`load_profiles` reads *all* profiles, then the caller slices.**~~ **Resolved:** `load_profiles(fileName, start, end)` reads only the requested range, and `profileProcessing.py` validates the range against a fast `count_profiles()` peek. | — |
 

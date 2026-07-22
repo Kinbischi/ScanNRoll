@@ -8,7 +8,89 @@ This project does not yet use formal version numbers; changes accumulate under
 
 ## [Unreleased]
 
+### Removed
+- **Dead-code cleanup (behaviour-preserving).** Deleted the unused pre-HDF5 CSV loaders
+  (`plotProfiles`, `loadProfiles`, `groupProfiles`) and `find_border_points`, the orphaned
+  `profileData.borderPoints` field, and now-unused imports (`matplotlib`, `pathlib`, `os`,
+  `time` in `profileLoading.py`; `h5py` in `profile3Dplotting.py`). Also fixed stale comments
+  (the flatness-threshold and `FLOOR_POINT_THRESHOLD` unit notes; removed resolved `show()`
+  notes), added a `MIN_PROFILE_POINTS` constant for the repeated `< 10` guard, made the two
+  wildcard imports explicit, and split the categorisation toggle into `SEED_USE_PROFILE_BASELINE`
+  / `GROW_USE_PROFILE_BASELINE`. No numeric or plot-output change. The
+  `integrate_area`/`shoelace_area`/`find_max_height` block in `profileData` was kept for later.
+- **Removed the write-only `profileData.profileNumber`** (with its buggy 1-digit `__post_init__`
+  regex and `import re`) and the unused `ySlope` field. `profileNumber`'s only reader was the
+  deleted `groupProfiles`; `ySlope` (raw `|dz/dx|`) was computed but never read. Old caches still
+  load (both are ignored as foreign keys).
+
+### Added
+- **Bead-edge width method + dual-method width visualisation.** New `width_from_bead_edges()`
+  measures bead width directly as the x-span between the outer (min-x / max-x) bead points using
+  `floorMask`, stored in `profileData.beadWidth` / `beadWidthIdx`. Both width methods now run in
+  `process_profiles`: the slope-peak method (`find_smooth_slope` + `width_from_smoothed_slope` →
+  `peaks`/`width`) and the new bead-edge method. Plotting gained a `"beadWidthPoints"` subject and
+  a `spheres` argument (`plottingClass.plot` can render enlarged sphere markers), and a new
+  `dataAnalysis.py` cell shows both methods' chosen points (slope-peak red, bead-edge blue).
+  Reprocess to populate the new fields.
+- **Floor vs profile point categorization.** `categorize_floor_points()` in
+  `profileProcessingAlgorithms.py` sets a per-point boolean `floorMask` on each profile
+  (`True` = floor, else bead point) by absolute-height threshold (`FLOOR_POINT_THRESHOLD`
+  = 20). Non-destructive and vectorised (superseding the older `find_border_points`). Runs
+  in `process_profiles` and is cached (auto-persisted by the
+  generic I/O). Plotting gained a `category="floor"|"profile"` argument
+  (`plottingClass.plot` / `get_profile_points_for_plot`) to draw only points of a category;
+  `dataAnalysis.py` has cells for a floor/bead two-colour view and a bead-only view.
+- **Positional prior for floor/bead categorization.** New `position_height_penalty()` adds a
+  per-point height penalty that is 0 within a central plateau (`BEAD_CENTER_HALFWIDTH` = 0.4 of
+  the half-width) and ramps linearly to `EDGE_HEIGHT_PENALTY` (400 z-units) at the profile
+  edges. It is added to both the seed threshold (`categorize_floor_points`) and the grow
+  threshold (`grow_profile_points`). Because the printed bead sits in the middle of the scan,
+  this makes points near the edges need more height to be classed as bead, suppressing raised
+  edge floor (notably the right side, which sits ~1.3 mm up) that was being mislabelled bead.
+  On a 1000-profile slice, profiles with a false right-edge bead dropped 115 → 67 while the
+  central bead was untouched (129068 centre points unchanged, ~3.7% fewer bead points overall).
+  The hysteresis / gap-fill logic is unchanged — only the thresholds became position-aware.
+  Reprocess required.
+- **Per-profile floor-fit categorization option.** `categorize_floor_points` and
+  `grow_profile_points` gained `use_profile_baseline` (default `False` = the existing uniform
+  median-levelled height). When `True`, floor/bead thresholds are applied to each point's height
+  above its OWN floor fit, `z - (m*x + b)` (via `_categorization_height`), so a profile's floor
+  sits at 0 regardless of its deviation from the dataset median. The stored `x`/`z` stay
+  median-levelled (relative heights kept for visualisation); only the categorisation basis
+  changes. `profileProcessing.py` exposes a `USE_PROFILE_BASELINE_CATEGORIZATION` toggle. On the
+  example data it gives nearly identical results to the median basis — the uniform leveling
+  already lands each profile within ~5 units of its own floor (residual `|b|` median 4.7) — so
+  the median method is kept for comparison. Reprocess to apply.
+
 ### Changed
+- **Slope-peak width now uses the outermost peaks (+ refactor).** `width_from_smoothed_slope`
+  measures the width between the two OUTERMOST slope peaks (furthest-left/right flanks) instead of
+  bailing to `NaN` whenever there weren't exactly two peaks — profiles with intermediate peaks now
+  get a width (coverage 123 → 257 of 300 on a test slice; the two-peak results are unchanged).
+  `peaks` now holds just those two width-defining points so the markers plot. Also refactored:
+  magic numbers lifted to named constants (`HEIGHT_SMOOTH_WINDOWS`, `SLOPE_SMOOTH_WINDOWS`,
+  `SLOPE_PEAK_MIN_HEIGHT` / `SLOPE_PEAK_MIN_DISTANCE`), the smoothing cascade looped, the dead
+  unused `ySlope` computation dropped, and type hints/docstrings added.
+- **Flat detection is now floor-based.** `flag_flat_profiles` flags a profile flat when the
+  categorisation found no bead points (every point is floor, via `floorMask`), replacing the
+  straight-line RMS-residual test as the default; the old method is kept behind
+  `use_line_fit=True` (with a `max_bead_points` tolerance, default 0). In floor-based mode
+  `flatness` is left None, so `load_profiles` preserves the cached `isFlat` (no load change). Now
+  run in the `process_profiles` pipeline after the grow step — reprocess to populate `isFlat`.
+- **Floor baseline fit cached, reused for plotting.** `rotate_and_shift_uniform` now stores
+  each profile's floor fit in the (previously unused) `profileData.m`/`.b` fields (the
+  intercept is carried through the final shift). `line_points_from_floorSides`
+  (`profile3Dplotting.py`) reads those instead of refitting via
+  `get_baseline_from_profileBorder`, so the baseline layer no longer re-runs the fit on
+  every plot; the drawn line is numerically identical (~1e-11). `m`/`b` are auto-saved in
+  the processed cache — reprocess to populate them; a profile with no stored fit falls back
+  to a flat line at z = 0.
+- **Robust floor baseline fit.** `get_baseline_from_profileBorder` now fits the floor with
+  an iterative lower-envelope (clip points above the fit down, refit, repeat) instead of
+  ordinary least squares. This ignores the curled-up paper edge (whose raised border points
+  biased the old fit high and over-shifted every profile down) and any bead intruding into
+  the border, so the `LSerror>50` two-sided fallback was removed. Cuts the median shift by
+  ~8 units (~0.08 mm); reprocess required.
 - **`dataAnalysis.py` is now a cell-based (`# %%`) plot workbench.** Runs cell-by-cell in
   VS Code's Interactive Window / Jupyter (or as a plain script) with a native PyVista
   window. Cells: load raw ("before") and the processed cache ("after") — both from files,

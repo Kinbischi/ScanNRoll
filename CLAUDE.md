@@ -19,12 +19,16 @@ OX200 LIDAR sensor for additive-manufacturing ("Rollerband") research.
 
 **Domain primer (one read and you understand the data):**
 - A **profile** = one cross-sectional scan: arrays `x` (across-track position)
-  and `z` (height).
-- The **baseline / floor** = the flat substrate the printed bead sits on; it is
-  estimated from the profile's left/right edges and used to level and rotate the
-  profile so the floor is at `z = 0` and horizontal.
-- The **width** = horizontal distance between the two slope peaks of the bead,
-  found from the smoothed gradient of `z`.
+  and `z` (height). Units: 1 unit ≈ 0.01 mm.
+- The **baseline / floor** = the flat substrate the printed bead sits on; estimated from
+  each profile's left/right edges (`get_baseline_from_profileBorder`). Leveling applies
+  **one median** rotation + shift to the whole set (keeping the real relative heights
+  between profiles) and stores each profile's own floor fit in `m`/`b`.
+- **Floor vs bead categorization** = a per-point `floorMask` splitting each profile into the
+  flat **floor** (substrate) and the raised **bead** (printed material). Most downstream
+  features build on it; a profile with no bead points is **flat**.
+- The **width** = how wide the bead is, measured two ways: between the two outermost
+  smoothed-slope peaks, and directly as the x-span between the outer bead points.
 - **Registration** (currently dormant) = aligning overlapping left/centre/right
   profiles in `x` and joining them into one combined profile.
 
@@ -41,7 +45,7 @@ Python/
 ├── dataAnalysis.py                       # ACTIVE  plot workbench (# %% cells): load raw+cache → 3D plot
 ├── profilePointsClass.py                 # ACTIVE  profileData dataclass ONLY (pure data model)
 ├── profileProcessingAlgorithms.py        # ACTIVE  processing algorithms (rotate/level/smooth/width/flatness)
-├── profileLoading.py                     # MIXED   load_profiles/save_profiles active; CSV loaders legacy
+├── profileLoading.py                     # ACTIVE  load_profiles/save_profiles (HDF5 I/O)
 ├── profile3Dplotting.py                 # ACTIVE  PyVista 3D plotting + print-path geometry
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
 ├── LidarProfileAnalysis_oldRegistration.py  # LEGACY  old entry point

@@ -7,6 +7,8 @@ from a **Baumer OX200** LIDAR sensor, as part of a PhD research project on
 A *profile* is a single cross-sectional scan: a row of `(x, z)` points where `x`
 is the position across the sensor's field of view and `z` is the measured height.
 Many profiles taken along a print path reconstruct the 3D shape of a printed bead.
+Processing splits each profile into the flat **floor** (the substrate) and the raised
+**bead** (the printed material), and measures the bead's width. (Units: 1 unit ≈ 0.01 mm.)
 
 ---
 
@@ -14,10 +16,13 @@ Many profiles taken along a print path reconstruct the 3D shape of a printed bea
 
 1. **Capture** — listen for UDP packets from the sensor and write each profile
    (plus its measurement metadata) into an HDF5 file.
-2. **Process** — for every profile: level it against the floor, rotate it flat,
-   smooth it, and measure the bead **width** from the smoothed slope.
-3. **Visualise** — lay the profiles out along a computed print path and render
-   them as an interactive 3D point cloud.
+2. **Process** — level every profile against the substrate (one median rotation + shift
+   for the whole set), categorise each point as **floor** or **bead**, flag substrate-only
+   ("flat") profiles, and measure the bead **width** two ways (from the smoothed-slope peaks
+   and from the outer bead points). Cached to a small processed HDF5.
+3. **Visualise** — lay the profiles out along a computed print path and render them as an
+   interactive 3D point cloud (floor vs bead in colour, flat profiles highlighted, width
+   markers, baselines).
 
 A separate (currently dormant) *registration* path aligns and joins overlapping
 profiles; see [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -81,7 +86,7 @@ interactive PyVista 3D window (requires a display).
 | --------------------- | ----------------------------------------------------- |
 | `*.py` (root)         | Source modules and entry-point scripts                |
 | `HDf5data/`           | Captured profile data (HDF5) — not version-controlled |
-| `ProfileData/`        | Older CSV profile exports (legacy loader)             |
+| `ProfileData/`        | Older CSV profile exports (unused; the CSV loaders were removed) |
 | `Pics/`               | Saved figures / screenshots                           |
 | `old/`, `RandomOther/`, `testGIthubCircleSquare/` | Scratch / legacy experiments      |
 | `Baumer_OX200_EN.pdf` | Sensor datasheet & UDP protocol reference             |

@@ -12,11 +12,10 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 ## P1 — Correctness (do before relying on the affected code)
 
 - [ ] **Fix `.y` → `.z` in the registration path.** `profileRegistration.py`
-      (`generateJoinedProfile`, `translateInX`, `registerAndShiftProfiles`),
-      `profileLoading.py` (`plotProfiles`, `loadProfiles`), and the commented
-      block in `dataAnalysis.py` read a `.y` field that `profileData` no
-      longer has. Dormant today, but will `AttributeError` the instant
-      registration is re-enabled. Fix all references together.
+      (`generateJoinedProfile`, `translateInX`, `registerAndShiftProfiles`) reads a `.y`
+      field that `profileData` no longer has. Dormant today, but will `AttributeError`
+      the instant registration is re-enabled. (The other `.y` users — the CSV loaders and
+      the `dataAnalysis.py` commented block — have since been removed.)
 - [x] ~~**Resolve the `ProfileData` / `profileData` name collision.**~~ Done — the
       wire-format class in `rawProfileUdpCapturing.py` was renamed to `ProfileDataRaw`. See
       [CHANGELOG.md](CHANGELOG.md).
@@ -44,10 +43,11 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 
 ## P3 — Polish & tooling
 
-- [ ] **Remove dead code & unused imports**: the large commented blocks in
-      `dataAnalysis.py`, `profileRegistration.py`, `profilePointsClass.py`;
-      unused `copy`, `NearestNeighbors`, and `pyvista` (in `profilePointsClass.py`);
-      unused legacy `loadProfiles` / `plotProfiles` if confirmed obsolete.
+- [x] ~~**Remove dead code & unused imports** in the active pipeline.~~ Done — deleted the CSV
+      loaders (`loadProfiles`/`plotProfiles`/`groupProfiles`), `find_border_points`, the
+      `borderPoints` field, and unused imports; see [CHANGELOG.md](CHANGELOG.md). Remaining
+      (out of scope): dead code in legacy `profileRegistration.py`. The `profilePointsClass.py`
+      area/max-height block is intentionally kept for later.
 - [ ] **Migrate `print` → `logging`** in `rawProfileUdpCapturing.py` (and elsewhere) with a
       module-level logger.
 - [ ] **Add a `pytest` suite** under `tests/`, starting with the pure functions
@@ -64,8 +64,8 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
       gives a fast pre-check. See [CHANGELOG.md](CHANGELOG.md).
 - [ ] **Persist smoothed arrays in the processed cache if a "plot smoothed profile"
       view is wanted.** `save_profiles` skips the bulky intermediates listed in
-      `_TRANSIENT_FIELDS` (`ySmooth`/`ySlopeSmooth`/`ySlope`/`borderPoints`); drop one
-      from that set to persist it.
+      `_TRANSIENT_FIELDS` (`ySmooth`/`ySlopeSmooth`/`ySlope`); drop one from that set to
+      persist it.
 - [ ] **Smoother large-cloud rendering beyond subsampling.** `plot()` now supports
       `profile_step`/`point_step` decimation (~37M points lags otherwise). If full
       detail with smooth interaction is needed, investigate a VTK level-of-detail
@@ -75,10 +75,11 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 
 ## Source TODOs already living in the code (carried over)
 
-- `profilePointsClass.py`: `profileNumber` not always parsed correctly;
-  several "empirical value" thresholds need justification.
-- `profile3Dplotting.py`: width-points plotting marked "not working"; coordinate
-  system noted as confusing; "check whether real profiles need 180° inversion".
+- `profileProcessingAlgorithms.py`: several smoothing / peak-detection constants remain
+  empirical (now named — `MIN_PROFILE_POINTS`, `SLOPE_PEAK_MIN_HEIGHT` / `_DISTANCE`, the
+  smoothing windows).
+- `profile3Dplotting.py`: the height → PyVista-y coordinate mapping is noted as confusing
+  (kept as an inline design note).
 - `profileRegistration.py`: "make a class again from this?"; joined-profile logic
   only handles <20% overhang; point ordering for area calc.
 - `rawProfileUdpCapturing.py`: NTP time sync strategy undecided; Python-side time sync.
