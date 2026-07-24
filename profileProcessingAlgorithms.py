@@ -12,6 +12,7 @@ import numpy as np
 import scipy as sp
 import scipy.signal    # ensure sp.signal.find_peaks is available without relying on side-effect imports
 import scipy.integrate # ensure sp.integrate.simpson is available (bead area)
+import scipy.ndimage   # ensure sp.ndimage.median_filter is available (smoothed height)
 
 from profilePointsClass import profileData
 
@@ -55,48 +56,52 @@ SLOPE_SMOOTH_WINDOWS = (65, 55, 15, 5)
 # Peak detection on the smoothed |dz/dx| (each bead flank shows up as a peak):
 SLOPE_PEAK_MIN_HEIGHT = 0.15   # min smoothed-slope height to count as a flank peak
 SLOPE_PEAK_MIN_DISTANCE = 50   # min points between two peaks
+FLANK_FOOT_HEIGHT = 100        # smoothed height (~1 mm above the z=0 floor) marking a flank foot
 
-def find_smooth_slope(profiles: list[profileData]) -> None:
-    """Smooth each profile's height and its absolute slope |dz/dx|.
-
-    Cascaded box filters (moving_average) suppress noise so the two bead flanks stand out as
-    clean peaks in the slope. Sets `ySmooth` and `ySlopeSmooth`; width_from_smoothed_slope then
-    locates the flank peaks. Too-short profiles are skipped.
-    """
-    for p in profiles:
-        if p.x.shape[0] < MIN_PROFILE_POINTS:
-            continue
-        ySmooth = p.z
-        for window in HEIGHT_SMOOTH_WINDOWS:
-            ySmooth = moving_average(ySmooth, window)
-        p.ySmooth = ySmooth
-
-        ySlopeSmooth = np.abs(np.gradient(ySmooth, p.x))
-        for window in SLOPE_SMOOTH_WINDOWS:
-            ySlopeSmooth = moving_average(ySlopeSmooth, window)
-        p.ySlopeSmooth = ySlopeSmooth
+def _flank_foot(x: np.ndarray, y_smooth: np.ndarray, peak_idx: int, threshold: float,
+                toward_smaller_x: bool) -> int:
+    """Index of the flank foot: the point nearest the peak, moving toward the bead edge, where the
+    smoothed height first drops to `threshold`. Falls back to the extreme edge point on that side if
+    the height never gets that low (e.g. raised edge floor)."""
+    if toward_smaller_x:
+        cand = np.flatnonzero((x < x[peak_idx]) & (y_smooth <= threshold))
+        return int(cand[np.argmax(x[cand])]) if cand.size else int(np.argmin(x))
+    cand = np.flatnonzero((x > x[peak_idx]) & (y_smooth <= threshold))
+    return int(cand[np.argmin(x[cand])]) if cand.size else int(np.argmax(x))
 
 def width_from_smoothed_slope(profiles: list[profileData]) -> None:
-    """Bead width from the two OUTERMOST slope peaks (furthest-left and furthest-right flanks).
+    """Bead width between the feet of the two OUTERMOST bead flanks.
 
-    Any intermediate peaks (surface texture, a lumpy bead top) are ignored — the width spans the
-    extreme flanks. Sets `width` and `peaks` (the two outermost peak indices); NaN / None when
-    fewer than two peaks are found. Needs `ySlopeSmooth` from find_smooth_slope.
+    Smooths the height and its |dz/dx| with cascaded box filters (locally — no stored arrays), finds
+    the flank peaks in the smoothed slope, keeps the furthest-left and furthest-right (intermediate
+    peaks from surface texture are ignored), then walks each flank down to its foot near the floor so
+    the width sits at the bead base rather than mid-flank. Sets `width` and `peaks` (the two width-
+    edge indices — flank feet); NaN / None when fewer than two flank peaks are found or the profile
+    is too short.
     """
     for p in profiles:
         p.peaks = None
-        if p.ySlopeSmooth is None:          # too short, or find_smooth_slope not run
+        if p.x.shape[0] < MIN_PROFILE_POINTS:
             p.width = np.nan
             continue
-        peaks, _ = sp.signal.find_peaks(p.ySlopeSmooth, height=SLOPE_PEAK_MIN_HEIGHT,
+        y_smooth = p.z
+        for window in HEIGHT_SMOOTH_WINDOWS:
+            y_smooth = moving_average(y_smooth, window)
+        slope = np.abs(np.gradient(y_smooth, p.x))
+        for window in SLOPE_SMOOTH_WINDOWS:
+            slope = moving_average(slope, window)
+
+        peaks, _ = sp.signal.find_peaks(slope, height=SLOPE_PEAK_MIN_HEIGHT,
                                         distance=SLOPE_PEAK_MIN_DISTANCE)
         if peaks.size < 2:
             p.width = np.nan
             continue
-        left = peaks[np.argmin(p.x[peaks])]    # flank at smallest x
-        right = peaks[np.argmax(p.x[peaks])]   # flank at largest x
-        p.peaks = np.array([left, right])
-        p.width = float(np.round(abs(p.x[right] - p.x[left]), decimals=2))
+        left_peak = peaks[np.argmin(p.x[peaks])]    # flank at smallest x
+        right_peak = peaks[np.argmax(p.x[peaks])]   # flank at largest x
+        left_foot = _flank_foot(p.x, y_smooth, left_peak, FLANK_FOOT_HEIGHT, toward_smaller_x=True)
+        right_foot = _flank_foot(p.x, y_smooth, right_peak, FLANK_FOOT_HEIGHT, toward_smaller_x=False)
+        p.peaks = np.array([left_foot, right_foot])
+        p.width = float(np.round(abs(p.x[right_foot] - p.x[left_foot]), decimals=2))
 
 def width_from_bead_edges(profiles: list[profileData]) -> None:
     """Bead width from the outer bead points: the x-span between the leftmost and rightmost
@@ -117,6 +122,31 @@ def width_from_bead_edges(profiles: list[profileData]) -> None:
         right = int(bead_idx[np.argmax(p.x[bead_idx])])  # bead point at largest x
         p.beadWidthIdx = np.array([left, right])
         p.beadWidth = float(np.round(abs(p.x[right] - p.x[left]), decimals=2))
+
+HEIGHT_PERCENTILE = 95     # bead height = this percentile of the bead-point heights (robust to spikes)
+MEDIAN_SMOOTH_WINDOW = 15  # median-filter window (points) for the smoothed-height measure
+
+def measure_bead_height(profiles: list[profileData], percentile: float = HEIGHT_PERCENTILE) -> None:
+    """Robust bead height above the shared median floor (z = 0 after rotate_and_shift_uniform), two ways.
+
+    `beadHeight` is the `percentile`-th percentile of the bead points' z (uses `floorMask`), so a lone
+    outlier/noise spike above that percentile is ignored. `beadHeightSmooth` is the max of a
+    median-smoothed profile over the bead points — a median filter removes single-point spikes, so its
+    peak is robust too; the two cross-check each other. Units: profile units (1 unit = 0.01 mm). NaN
+    when a profile has no bead points (no floorMask, or flat). Run after grow_profile_points.
+    """
+    for p in profiles:
+        p.beadHeight = np.nan
+        p.beadHeightSmooth = np.nan
+        if p.floorMask is None:
+            continue
+        bead = ~p.floorMask
+        bead_z = p.z[bead]
+        if bead_z.size == 0:
+            continue
+        p.beadHeight = float(np.round(np.percentile(bead_z, percentile), decimals=2))
+        z_smooth = sp.ndimage.median_filter(p.z, size=MEDIAN_SMOOTH_WINDOW, mode="nearest")
+        p.beadHeightSmooth = float(np.round(z_smooth[bead].max(), decimals=2))
 
 def _bead_area_integration(x: np.ndarray, h: np.ndarray) -> float:
     """Bead cross-section by Simpson integration of the bead height h over x.

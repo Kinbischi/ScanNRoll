@@ -6,9 +6,10 @@ from profilePointsClass import profileData
 from profileProcessingAlgorithms import FLATNESS_RMS_THRESHOLD  # explicit: used in load_profiles
 
 
-# profileData fields that are bulky per-point intermediates recomputed by processing;
-# they are not persisted by save_profiles so cached files stay small.
-_TRANSIENT_FIELDS = {"ySmooth", "ySlopeSmooth"}
+# profileData fields that are bulky per-point intermediates recomputed by processing are excluded
+# from persistence here so cached files stay small. None are currently excluded (the former
+# ySmooth/ySlopeSmooth are now function-local), but the mechanism is kept for future intermediates.
+_TRANSIENT_FIELDS: set[str] = set()
 
 
 def save_profiles(profiles: list[profileData], fileName: str, **file_attrs) -> None:

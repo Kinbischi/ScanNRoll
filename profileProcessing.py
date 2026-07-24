@@ -10,10 +10,10 @@ from profileLoading import count_profiles, load_profiles, save_profiles
 from profilePointsClass import profileData
 from profileProcessingAlgorithms import (
     categorize_floor_points,
-    find_smooth_slope,
     flag_flat_profiles,
     grow_profile_points,
     measure_bead_area,
+    measure_bead_height,
     rotate_and_shift_uniform,
     width_from_bead_edges,
     width_from_smoothed_slope,
@@ -50,10 +50,10 @@ def process_profiles(profiles: list[profileData]) -> list[profileData]:
     categorize_floor_points(profiles, use_profile_baseline=SEED_USE_PROFILE_BASELINE)
     grow_profile_points(profiles, use_profile_baseline=GROW_USE_PROFILE_BASELINE)
     flag_flat_profiles(profiles)  # flat = no bead points (uses floorMask; set after grow)
-    # width, two ways: slope-peak method (needs the smoothed slope) and outer-bead-point method
-    find_smooth_slope(profiles)
-    width_from_smoothed_slope(profiles)  # -> peaks, width
+    # width, two ways: smoothed-slope flank feet and the outer bead points
+    width_from_smoothed_slope(profiles)  # -> peaks, width (smooths internally)
     width_from_bead_edges(profiles)      # -> beadWidthIdx, beadWidth
+    measure_bead_height(profiles)        # -> beadHeight, beadHeightSmooth (robust bead heights)
     # cross-sectional bead area above the median floor, two ways (integration + shoelace)
     measure_bead_area(profiles)          # -> area, shoelaceArea
     # Optional steps in profileProcessingAlgorithms (import + call to enable): rotate_pointcloud

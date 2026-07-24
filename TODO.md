@@ -62,10 +62,6 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 - [x] ~~**Avoid loading the whole raw file when only a slice is needed.**~~ Done —
       `load_profiles(fileName, start, end)` reads only the range and `count_profiles()`
       gives a fast pre-check. See [CHANGELOG.md](CHANGELOG.md).
-- [ ] **Persist smoothed arrays in the processed cache if a "plot smoothed profile"
-      view is wanted.** `save_profiles` skips the bulky intermediates listed in
-      `_TRANSIENT_FIELDS` (`ySmooth`/`ySlopeSmooth`/`ySlope`); drop one from that set to
-      persist it.
 - [ ] **Smoother large-cloud rendering beyond subsampling.** `plot()` now supports
       `profile_step`/`point_step` decimation (~37M points lags otherwise). If full
       detail with smooth interaction is needed, investigate a VTK level-of-detail

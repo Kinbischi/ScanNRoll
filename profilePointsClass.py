@@ -14,12 +14,12 @@ class profileData:
     b: Optional[float] = None
 
     floorMask: Optional[np.ndarray] = None  # per-point bool: True = floor point, False = profile (bead)
-    ySmooth: Optional[np.ndarray] = None
-    ySlopeSmooth: Optional[np.ndarray] = None
-    peaks: Optional[np.ndarray] = None
+    peaks: Optional[np.ndarray] = None      # the two width-edge indices (flank feet)
     width: Optional[float] = None
     beadWidthIdx: Optional[np.ndarray] = None  # indices of the two outer bead points (bead-edge width)
     beadWidth: Optional[float] = None          # x-span between the two outer bead points
+    beadHeight: Optional[float] = None         # robust bead height (95th pct of bead z above z=0)
+    beadHeightSmooth: Optional[float] = None   # robust bead height (max of median-smoothed z above z=0)
     isFlat: Optional[bool] = None
     flatness: Optional[float] = None
     area: Optional[float] = None           # bead cross-section, Simpson integration (profile-unit^2)

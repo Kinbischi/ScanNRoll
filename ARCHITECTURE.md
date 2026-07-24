@@ -116,10 +116,14 @@ plotter.show()                           # interactive PyVista window
    lower flanks, then fill small interior gaps.
 4. `flag_flat_profiles` — mark a profile flat when it has **no bead points** (floor only). The
    old line-fit-residual method is kept behind `use_line_fit=True`.
-5. `find_smooth_slope` → `width_from_smoothed_slope` — bead width from the two **outermost**
-   smoothed-slope peaks (the flanks).
+5. `width_from_smoothed_slope` — bead width between the feet of the two **outermost** bead flanks:
+   smooths z and |dz/dx| internally, finds the outer flank peaks, then walks each flank down to its
+   foot near the floor (so the markers sit at the bead base, not mid-flank).
 6. `width_from_bead_edges` — bead width the other way: the x-span between the outer bead points.
-7. `measure_bead_area` — cross-sectional bead area over the shared `z = 0` median floor, two
+7. `measure_bead_height` — robust bead height above the `z = 0` median floor, two ways: the 95th
+   percentile of the bead points' z → `beadHeight`, and the max of a median-smoothed profile →
+   `beadHeightSmooth` (both ignore outlier spikes).
+8. `measure_bead_area` — cross-sectional bead area over the shared `z = 0` median floor, two
    ways (Simpson integration → `area`, shoelace polygon → `shoelaceArea`) as a mutual cross-check.
 
 The plot workbench (`dataAnalysis.py`) draws floor vs bead in two colours (`category=`), flat
@@ -129,10 +133,10 @@ profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` referen
 selector panel (`plot_feature_heatmap`): all features are attached to the cloud as separate
 scalar arrays, so clicking a feature button only repoints the mapper and rescales the colour bar.
 
-Key detail: `find_smooth_slope` cascades box filters (`moving_average`) over `z`, takes the
-gradient, and smooths it again; `width_from_smoothed_slope` runs `scipy.signal.find_peaks` on
-that smoothed slope and spans the **outermost** peaks — intermediate peaks are ignored (`NaN`
-only when fewer than two peaks). The per-profile alternative (`rotate_pointcloud` +
+Key detail: `width_from_smoothed_slope` cascades box filters (`moving_average`) over `z` (locally —
+no stored arrays), takes the gradient and smooths it again, runs `scipy.signal.find_peaks` on that
+smoothed slope, keeps the **outermost** peaks (intermediate peaks ignored; `NaN` when fewer than
+two), then walks each flank down to its foot. The per-profile alternative (`rotate_pointcloud` +
 `translate_floor_to_zero`) is kept but dormant.
 
 ### 4.2 Acquisition pipeline (`rawProfileUdpCapturing.py`)
@@ -190,12 +194,13 @@ analysis side.
 A second, much smaller HDF5 holds the *processed* result so plotting can skip the raw
 load and the processing pipeline. Same `profile_NNNNNN` group layout:
 
-- Datasets: `x`, `z` (rotated + levelled coordinates), `peaks` (the two outermost slope-peak
+- Datasets: `x`, `z` (rotated + levelled coordinates), `peaks` (the two width-edge / flank-foot
   indices), `beadWidthIdx` (the two outer bead-point indices).
-- Attributes: `name`, `width` (slope-peak method, NaN when < 2 peaks), `beadWidth` (bead-edge
-  method), `area` / `shoelaceArea` (bead cross-section, integration vs shoelace; NaN when flat),
-  `isFlat` (bool), `flatness` (line-fit RMS residual; None for the default floor-based flat
-  method).
+- Attributes: `name`, `width` (smoothed-slope flank-foot method, NaN when < 2 flanks), `beadWidth`
+  (bead-edge method), `beadHeight` / `beadHeightSmooth` (robust bead heights, percentile vs
+  median-smoothed; NaN when flat), `area` / `shoelaceArea` (bead cross-section, integration vs
+  shoelace; NaN when flat), `isFlat` (bool), `flatness` (line-fit RMS residual; None for the
+  default floor-based flat method).
 - File attributes: `kind = "processed"`, `source_file` (the raw path) for provenance.
 
 The default (floor-based) flat method caches `isFlat` directly and leaves `flatness` unset;
@@ -203,9 +208,8 @@ The default (floor-based) flat method caches `isFlat` directly and leaves `flatn
 line-fit method (`flag_flat_profiles(use_line_fit=True)`), which stores an RMS `flatness` — so
 that cutoff can be retuned without reprocessing.
 
-Smoothed arrays (`ySmooth`, `ySlopeSmooth`) are intermediates and are **not** stored;
-a future "plot smoothed profile" option would need them added. Example sizes: a
-2000-profile slice is ~30 MB processed vs ~810 MB raw, and loads in ~1 s vs ~19 s.
+Example sizes: a 2000-profile slice is ~30 MB processed vs ~810 MB raw, and loads in
+~1 s vs ~19 s.
 
 ---
 

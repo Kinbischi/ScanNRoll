@@ -66,9 +66,9 @@ pl.show()
 
 
 # %% 3D - bead points with both width methods marked (needs a reprocessed cache)
-# widthPoints (slope-peak method) in red, beadWidthPoints (outer bead points) in blue — both
+# widthPoints (flank-foot method) in red, beadWidthPoints (outer bead points) in blue — both
 # enlarged and sphere-rendered so the two chosen points stand out. The marker indices come from
-# find_smooth_slope + width_from_smoothed_slope (peaks) and width_from_bead_edges (beadWidthIdx).
+# width_from_smoothed_slope (peaks) and width_from_bead_edges (beadWidthIdx).
 pl = profile3Dplotting.plottingClass(len(processed))
 pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
 pl.plot(processed, "widthPoints", "red", size=15, spheres=True)       # slope-peak method
@@ -78,11 +78,11 @@ pl.show()
 
 # %% 3D - bead heat-map with a live feature selector (needs a reprocessed cache for area/shoelaceArea)
 # Colour the bead points by a per-profile feature; click a button in the left-edge panel to switch
-# the active feature in real time. The colour bar rescales per feature (area ~1e6 vs width ~1e3),
-# flat profiles have no bead points so they drop out, and NaN values show grey. Interactive
-# window only (the buttons need the native VTK window).
+# the active feature in real time. Features are grouped (width / height / area); each group shares
+# one colour range and the bar is labelled in mm / mm^2. Flat profiles have no bead points so they
+# drop out, and NaN values show grey. Interactive window only (the buttons need the native VTK window).
 pl = profile3Dplotting.plottingClass(len(processed))
-pl.plot_feature_heatmap(processed, features=("beadWidth", "width", "area", "shoelaceArea"),
+pl.plot_feature_heatmap(processed, features=("width", "beadWidth", "beadHeight", "beadHeightSmooth", "area", "shoelaceArea"),
                         initial="beadWidth", profile_step=PROFILE_STEP, point_step=POINT_STEP)
 pl.show()
 

@@ -8,6 +8,14 @@ This project does not yet use formal version numbers; changes accumulate under
 
 ## [Unreleased]
 
+### Changed
+- **`width_from_smoothed_slope` now reports flank feet and is self-contained.** It folds the former
+  `find_smooth_slope` smoothing in as locals (so `find_smooth_slope` is gone), and after finding the
+  two outermost flank peaks it walks each flank down to its **foot** near the floor
+  (`FLANK_FOOT_HEIGHT`), so the width markers sit at the bead base instead of mid-flank. `width`
+  values shift outward (closer to `beadWidth`); the `peaks` field now holds the two flank-foot
+  indices. Reprocess to refresh.
+
 ### Removed
 - **Dead-code cleanup (behaviour-preserving).** Deleted the unused pre-HDF5 CSV loaders
   (`plotProfiles`, `loadProfiles`, `groupProfiles`) and `find_border_points`, the orphaned
@@ -22,8 +30,17 @@ This project does not yet use formal version numbers; changes accumulate under
   regex and `import re`) and the unused `ySlope` field. `profileNumber`'s only reader was the
   deleted `groupProfiles`; `ySlope` (raw `|dz/dx|`) was computed but never read. Old caches still
   load (both are ignored as foreign keys).
+- **Dropped the stored `profileData.ySmooth` / `ySlopeSmooth` fields.** The smoothing they held is
+  now computed locally inside `width_from_smoothed_slope` (see Changed); nothing else read them and
+  they were never persisted (`_TRANSIENT_FIELDS` is now empty). Old caches still load.
 
 ### Added
+- **Robust bead height (two measures).** `measure_bead_height()` in `profileProcessingAlgorithms.py`
+  sets `profileData.beadHeight` (95th percentile, `HEIGHT_PERCENTILE`, of the bead points' z) and
+  `beadHeightSmooth` (max of a median-smoothed profile, `MEDIAN_SMOOTH_WINDOW`) above the shared
+  `z = 0` median floor — both robust to outlier/noise spikes, unlike a raw max, and cross-checking.
+  NaN for flat profiles. Runs in `process_profiles` and both are selectable heat-map features.
+  Reprocess to populate.
 - **Interactive bead feature heat-map.** New `plottingClass.plot_feature_heatmap()` in
   `profile3Dplotting.py` colours the bead cloud by a per-profile scalar (`beadWidth`, `width`,
   `area`, `shoelaceArea`) and adds a left-edge button panel to switch the active feature live.

@@ -2,6 +2,18 @@ import numpy as np
 import pyvista as pv
 from profilePointsClass import profileData
 
+# Heat-map feature display: feature -> (group, unit factor, unit label). 1 profile unit = 0.01 mm,
+# so lengths scale to mm and areas to mm^2. Features sharing a group share one colour range (clim),
+# so paired measures are directly comparable; grouping also sets the button order.
+FEATURE_DISPLAY = {
+    "width":            ("width",  0.01, "mm"),
+    "beadWidth":        ("width",  0.01, "mm"),
+    "beadHeight":       ("height", 0.01, "mm"),
+    "beadHeightSmooth": ("height", 0.01, "mm"),
+    "area":             ("area",   1e-4, "mm^2"),
+    "shoelaceArea":     ("area",   1e-4, "mm^2"),
+}
+
 
 class plottingClass:
     def __init__(self, numOfprofiles):
@@ -99,17 +111,20 @@ class plottingClass:
             self.plotter.add_mesh(lines, color = colour, line_width=5)
 
     def plot_feature_heatmap(self, profiles: list[profileData],
-                             features: tuple[str, ...] = ("beadWidth", "width", "area", "shoelaceArea"),
+                             features: tuple[str, ...] = ("width", "beadWidth", "beadHeight", "beadHeightSmooth", "area", "shoelaceArea"),
                              initial: str = "beadWidth", cmap: str = "viridis",
                              point_size: int = 6, profile_step: int = 1, point_step: int = 1) -> None:
         """Colour the bead cloud by a per-profile scalar feature, with a clickable button panel
         to switch the active feature live.
 
         Each feature in `features` is attached to the cloud as its own point-data array (each
-        profile's scalar broadcast to its bead points), so switching only repoints the mapper and
-        rescales the colour bar — no recompute. Bead points only (`~floorMask`); flat profiles
-        contribute none. NaN feature values (e.g. width with < 2 peaks) render in the NaN colour.
-        Interactive-window only (the buttons need a live VTK interactor).
+        profile's scalar broadcast to its bead points, converted to physical units per
+        FEATURE_DISPLAY), so switching only repoints the mapper and rescales the colour bar — no
+        recompute. Features in the same group (width / height / area) share one colour range so the
+        paired measures are directly comparable, and the colour bar is labelled in mm / mm^2. Bead
+        points only (`~floorMask`); flat profiles contribute none. NaN feature values (e.g. width
+        with < 2 flanks) render in the NaN colour. Interactive-window only (buttons need a live VTK
+        interactor).
         """
         self._build_feature_cloud(profiles, features, initial, cmap, point_size,
                                   profile_step, point_step)
@@ -132,7 +147,8 @@ class plottingClass:
             transformed.append(self.pathPoints[i] + prof_pts @ self.rotation_matrices[i].T)
             for f in features:
                 val = getattr(profiles[i], f)
-                columns[f].append(np.full(prof_pts.shape[0], np.nan if val is None else float(val)))
+                factor = FEATURE_DISPLAY[f][1]  # profile units -> physical (mm / mm^2)
+                columns[f].append(np.full(prof_pts.shape[0], np.nan if val is None else float(val) * factor))
         if not transformed:
             return  # nothing to draw (e.g. every profile flat)
 
@@ -141,26 +157,45 @@ class plottingClass:
             cloud[f] = np.concatenate(columns[f])
         cloud.set_active_scalars(initial)
 
+        # features in the same group share one colour range, computed over the whole group's values
+        groups: dict[str, list[str]] = {}
+        for f in features:
+            groups.setdefault(FEATURE_DISPLAY[f][0], []).append(f)
+        group_clim = {g: _finite_clim(np.concatenate([cloud[f] for f in feats]))
+                      for g, feats in groups.items()}
+
         self._feature_names = list(features)
         self._feature_initial = initial
-        self._feature_clim = {f: _finite_clim(cloud[f]) for f in features}
+        self._feature_clim = {f: group_clim[FEATURE_DISPLAY[f][0]] for f in features}
+        self._feature_unit = {f: FEATURE_DISPLAY[f][2] for f in features}
         self._feature_cloud = cloud
         actor = self.plotter.add_points(
             cloud, scalars=initial, cmap=cmap, clim=self._feature_clim[initial],
             nan_color="lightgray", point_size=point_size, render_points_as_spheres=False,
-            scalar_bar_args={"title": "value"},
+            scalar_bar_args={"title": "", "label_font_size": 14, "position_x": 0.33,
+                             "position_y": 0.10, "width": 0.34, "height": 0.05},
         )
         self._feature_mapper = actor.mapper
-        self.plotter.add_text(initial, name="feature_title", position="upper_edge", font_size=12)
+        self._set_feature_labels(initial)
+
+    def _set_feature_labels(self, feature: str) -> None:
+        """Feature name at the top edge, and its unit centred just above the horizontal colour bar
+        (a separate text actor so the unit is not cramped against the bar and its numbers)."""
+        self.plotter.add_text(feature, name="feature_title", position="upper_edge", font_size=16)
+        # anchor at the bar's centre (x = 0.50) with centred justification so mm / mm^2 stay centred
+        unit_actor = self.plotter.add_text(self._feature_unit[feature], name="feature_unit",
+                                           position=(0.50, 0.17), viewport=True, font_size=16)
+        unit_actor.GetTextProperty().SetJustificationToCentered()
 
     def _set_feature(self, feature: str) -> None:
-        """Switch the active feature: repoint the mapper, rescale the colour bar, relabel."""
+        """Switch the active feature: repoint the mapper, rescale to the group's shared range
+        (physical units), and relabel the feature name + unit."""
         self._feature_cloud.set_active_scalars(feature)
         self._feature_mapper.array_name = feature
         clim = self._feature_clim[feature]
         if clim is not None:
             self._feature_mapper.scalar_range = clim
-        self.plotter.add_text(feature, name="feature_title", position="upper_edge", font_size=12)
+        self._set_feature_labels(feature)
         self.plotter.render()
 
     def _add_feature_selector(self, size: int = 26, gap: int = 8) -> None:
