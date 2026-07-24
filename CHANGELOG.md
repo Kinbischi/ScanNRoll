@@ -24,6 +24,20 @@ This project does not yet use formal version numbers; changes accumulate under
   load (both are ignored as foreign keys).
 
 ### Added
+- **Interactive bead feature heat-map.** New `plottingClass.plot_feature_heatmap()` in
+  `profile3Dplotting.py` colours the bead cloud by a per-profile scalar (`beadWidth`, `width`,
+  `area`, `shoelaceArea`) and adds a left-edge button panel to switch the active feature live.
+  Every feature is attached to the cloud as its own point-data array, so a click only repoints
+  the mapper and rescales the colour bar (per-feature `clim`) — no recompute. Bead points only
+  (`~floorMask`); flat profiles drop out and NaN values render grey. Interactive window only;
+  new `dataAnalysis.py` cell.
+- **Bead cross-sectional area (two methods).** New `measure_bead_area()` in
+  `profileProcessingAlgorithms.py` measures the bead's cross-section over the shared `z = 0`
+  median floor (from `rotate_and_shift_uniform`, not each profile's own fit), across the bead
+  span from `floorMask`. Two independent numerical schemes cross-check each other: Simpson
+  integration → `profileData.area`, shoelace polygon → `profileData.shoelaceArea` (they agree to
+  ~0.02% on typical beads). NaN for flat profiles. Runs in `process_profiles` and is cached via
+  the generic I/O. Reprocess to populate the new fields.
 - **Bead-edge width method + dual-method width visualisation.** New `width_from_bead_edges()`
   measures bead width directly as the x-span between the outer (min-x / max-x) bead points using
   `floorMask`, stored in `profileData.beadWidth` / `beadWidthIdx`. Both width methods now run in

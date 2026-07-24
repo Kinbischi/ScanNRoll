@@ -29,6 +29,8 @@ OX200 LIDAR sensor for additive-manufacturing ("Rollerband") research.
   features build on it; a profile with no bead points is **flat**.
 - The **width** = how wide the bead is, measured two ways: between the two outermost
   smoothed-slope peaks, and directly as the x-span between the outer bead points.
+- The **area** = the bead's cross-section above the shared `z = 0` median floor, measured two
+  ways as a cross-check: Simpson integration (`area`) and the shoelace polygon (`shoelaceArea`).
 - **Registration** (currently dormant) = aligning overlapping left/centre/right
   profiles in `x` and joining them into one combined profile.
 

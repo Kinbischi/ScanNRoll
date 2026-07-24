@@ -119,11 +119,15 @@ plotter.show()                           # interactive PyVista window
 5. `find_smooth_slope` → `width_from_smoothed_slope` — bead width from the two **outermost**
    smoothed-slope peaks (the flanks).
 6. `width_from_bead_edges` — bead width the other way: the x-span between the outer bead points.
+7. `measure_bead_area` — cross-sectional bead area over the shared `z = 0` median floor, two
+   ways (Simpson integration → `area`, shoelace polygon → `shoelaceArea`) as a mutual cross-check.
 
 The plot workbench (`dataAnalysis.py`) draws floor vs bead in two colours (`category=`), flat
 profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
 (`"baseline"` / `"zeroBaseline"`), and both width methods' points (`"widthPoints"` /
-`"beadWidthPoints"`).
+`"beadWidthPoints"`). It can also colour the bead by a per-profile feature with a live
+selector panel (`plot_feature_heatmap`): all features are attached to the cloud as separate
+scalar arrays, so clicking a feature button only repoints the mapper and rescales the colour bar.
 
 Key detail: `find_smooth_slope` cascades box filters (`moving_average`) over `z`, takes the
 gradient, and smooths it again; `width_from_smoothed_slope` runs `scipy.signal.find_peaks` on
@@ -189,8 +193,9 @@ load and the processing pipeline. Same `profile_NNNNNN` group layout:
 - Datasets: `x`, `z` (rotated + levelled coordinates), `peaks` (the two outermost slope-peak
   indices), `beadWidthIdx` (the two outer bead-point indices).
 - Attributes: `name`, `width` (slope-peak method, NaN when < 2 peaks), `beadWidth` (bead-edge
-  method), `isFlat` (bool), `flatness` (line-fit RMS residual; None for the default floor-based
-  flat method).
+  method), `area` / `shoelaceArea` (bead cross-section, integration vs shoelace; NaN when flat),
+  `isFlat` (bool), `flatness` (line-fit RMS residual; None for the default floor-based flat
+  method).
 - File attributes: `kind = "processed"`, `source_file` (the raw path) for provenance.
 
 The default (floor-based) flat method caches `isFlat` directly and leaves `flatness` unset;
@@ -215,7 +220,7 @@ Severity is relative to *current* behaviour. Full remediation backlog in
 | 2 | ~~**Name collision** between the wire-format `ProfileData` (`rawProfileUdpCapturing.py`) and analysis `profileData` (`profilePointsClass.py`).~~ **Resolved:** the wire-format class is now `ProfileDataRaw`. | — |
 | 3 | **Wildcard imports** (`from x import *`) — now confined to the dormant `profileRegistration.py`; the active analysis modules use explicit imports. | Low — limited to off-path legacy code. |
 | 4 | **Magic constants** — many are now named in `profileProcessingAlgorithms.py` (`MIN_PROFILE_POINTS`, `FLOOR_POINT_THRESHOLD`, the positional-prior, slope-peak and smoothing-window constants). Still un-named: path geometry `2000/5000/80000` (`profile3Dplotting.py`), the UDP address/port and parser byte offsets (`rawProfileUdpCapturing.py`). Values are unit-dependent (1 unit ≈ 0.01 mm). | Medium — a shared `config` module is still wanted for the rest. |
-| 5 | **Dead code & unused imports** (active pipeline cleared): the CSV loaders, `find_border_points`, the `borderPoints` field, and unused imports were removed. Remaining is out-of-scope legacy (`profileRegistration.py`); the `profilePointsClass.py` area/max-height block is intentionally kept for later. | Low — clutter, risk of "fixing" code that never runs. |
+| 5 | **Dead code & unused imports** (active pipeline cleared): the CSV loaders, `find_border_points`, the `borderPoints` field, and unused imports were removed. Remaining is out-of-scope legacy (`profileRegistration.py`); the `profilePointsClass.py` max-height block is intentionally kept for later (the area block it sat with is now implemented as `measure_bead_area`). | Low — clutter, risk of "fixing" code that never runs. |
 | 6 | **Missing type hints & docstrings** on most module-level functions. | Low/Medium — slows comprehension; no static-analysis safety net. |
 | 7 | **No error handling at boundaries**: HDF5 load assumes well-formed files; UDP parser uses a broad `except Exception` and unbounded buffering dicts. | Medium — silent data loss / memory growth on malformed or out-of-order packets. |
 | 8 | **Hardcoded paths & IP** in the entry scripts. | Low — non-portable; blocks reuse on another machine. |

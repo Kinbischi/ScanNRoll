@@ -18,8 +18,9 @@ Processing splits each profile into the flat **floor** (the substrate) and the r
    (plus its measurement metadata) into an HDF5 file.
 2. **Process** — level every profile against the substrate (one median rotation + shift
    for the whole set), categorise each point as **floor** or **bead**, flag substrate-only
-   ("flat") profiles, and measure the bead **width** two ways (from the smoothed-slope peaks
-   and from the outer bead points). Cached to a small processed HDF5.
+   ("flat") profiles, measure the bead **width** two ways (from the smoothed-slope peaks
+   and from the outer bead points), and its cross-sectional **area** two ways (integration and
+   the shoelace formula). Cached to a small processed HDF5.
 3. **Visualise** — lay the profiles out along a computed print path and render them as an
    interactive 3D point cloud (floor vs bead in colour, flat profiles highlighted, width
    markers, baselines).

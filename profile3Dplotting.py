@@ -98,6 +98,94 @@ class plottingClass:
             lines = pv.line_segments_from_points(np.array(endpoints))
             self.plotter.add_mesh(lines, color = colour, line_width=5)
 
+    def plot_feature_heatmap(self, profiles: list[profileData],
+                             features: tuple[str, ...] = ("beadWidth", "width", "area", "shoelaceArea"),
+                             initial: str = "beadWidth", cmap: str = "viridis",
+                             point_size: int = 6, profile_step: int = 1, point_step: int = 1) -> None:
+        """Colour the bead cloud by a per-profile scalar feature, with a clickable button panel
+        to switch the active feature live.
+
+        Each feature in `features` is attached to the cloud as its own point-data array (each
+        profile's scalar broadcast to its bead points), so switching only repoints the mapper and
+        rescales the colour bar — no recompute. Bead points only (`~floorMask`); flat profiles
+        contribute none. NaN feature values (e.g. width with < 2 peaks) render in the NaN colour.
+        Interactive-window only (the buttons need a live VTK interactor).
+        """
+        self._build_feature_cloud(profiles, features, initial, cmap, point_size,
+                                  profile_step, point_step)
+        self._add_feature_selector()
+
+    def _build_feature_cloud(self, profiles: list[profileData], features: tuple[str, ...],
+                             initial: str, cmap: str, point_size: int,
+                             profile_step: int, point_step: int) -> None:
+        """Build and add the bead cloud carrying one scalar array per feature, and store the
+        state the selector callback mutates. Separated from the widget wiring so it can be
+        exercised without a live interactor (headless tests)."""
+        if initial not in features:
+            raise ValueError(f"initial feature {initial!r} not in {features}")
+        per_profile = get_profile_points_for_plot(profiles, profile_step, point_step, category="profile")
+        transformed = []
+        columns: dict[str, list[np.ndarray]] = {f: [] for f in features}
+        for i, prof_pts in enumerate(per_profile):
+            if prof_pts.shape[0] == 0:  # skipped, empty, or flat (no bead points)
+                continue
+            transformed.append(self.pathPoints[i] + prof_pts @ self.rotation_matrices[i].T)
+            for f in features:
+                val = getattr(profiles[i], f)
+                columns[f].append(np.full(prof_pts.shape[0], np.nan if val is None else float(val)))
+        if not transformed:
+            return  # nothing to draw (e.g. every profile flat)
+
+        cloud = pv.PolyData(np.vstack(transformed))
+        for f in features:
+            cloud[f] = np.concatenate(columns[f])
+        cloud.set_active_scalars(initial)
+
+        self._feature_names = list(features)
+        self._feature_initial = initial
+        self._feature_clim = {f: _finite_clim(cloud[f]) for f in features}
+        self._feature_cloud = cloud
+        actor = self.plotter.add_points(
+            cloud, scalars=initial, cmap=cmap, clim=self._feature_clim[initial],
+            nan_color="lightgray", point_size=point_size, render_points_as_spheres=False,
+            scalar_bar_args={"title": "value"},
+        )
+        self._feature_mapper = actor.mapper
+        self.plotter.add_text(initial, name="feature_title", position="upper_edge", font_size=12)
+
+    def _set_feature(self, feature: str) -> None:
+        """Switch the active feature: repoint the mapper, rescale the colour bar, relabel."""
+        self._feature_cloud.set_active_scalars(feature)
+        self._feature_mapper.array_name = feature
+        clim = self._feature_clim[feature]
+        if clim is not None:
+            self._feature_mapper.scalar_range = clim
+        self.plotter.add_text(feature, name="feature_title", position="upper_edge", font_size=12)
+        self.plotter.render()
+
+    def _add_feature_selector(self, size: int = 26, gap: int = 8) -> None:
+        """Add one toggle button per feature (a left-edge panel); clicking one makes it the active
+        feature and visually deselects the others (radio behaviour)."""
+        self._feature_buttons = []
+        for idx, feature in enumerate(self._feature_names):
+            y = 12 + idx * (size + gap)
+            widget = self.plotter.add_checkbox_button_widget(
+                self._make_feature_callback(feature, idx),
+                value=(feature == self._feature_initial),
+                position=(12, y), size=size, color_on="green", color_off="grey",
+            )
+            self._feature_buttons.append(widget)
+            self.plotter.add_text(feature, position=(12 + size + 8, y + 4), font_size=10)
+
+    def _make_feature_callback(self, feature: str, idx: int):
+        """Build the click callback for one feature button: enforce single-selection (radio) and
+        switch the active feature. Setting the other buttons' state does not re-fire callbacks."""
+        def callback(state: bool) -> None:
+            for j, widget in enumerate(self._feature_buttons):
+                widget.GetRepresentation().SetState(1 if j == idx else 0)
+            self._set_feature(feature)
+        return callback
+
 
 def get_profile_points_for_plot(profiles: list[profileData], profile_step: int = 1,
                                 point_step: int = 1, want_flat: bool | None = None,
@@ -143,6 +231,17 @@ def width_point_arrays(profiles: list[profileData], idx_attr: str):
         else:
             out.append(np.empty((0, 3)))
     return out
+
+def _finite_clim(values: np.ndarray) -> "list[float] | None":
+    """[min, max] over the finite entries of `values`, or None if none are finite.
+
+    A degenerate (min == max) range is widened by 1 so the colormap is not singular.
+    """
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return None
+    lo, hi = float(finite.min()), float(finite.max())
+    return [lo, hi + 1.0] if lo == hi else [lo, hi]
 
 def line_points_from_floorSides(profiles: list[profileData]):
     """Endpoints of each profile's floor baseline from its stored fit (m, b).

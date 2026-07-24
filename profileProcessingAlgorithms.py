@@ -10,7 +10,8 @@ Units: x and z are in profile units where 1 unit = 0.01 mm (so 20 = 0.2 mm, 100 
 """
 import numpy as np
 import scipy as sp
-import scipy.signal  # ensure sp.signal.find_peaks is available without relying on side-effect imports
+import scipy.signal    # ensure sp.signal.find_peaks is available without relying on side-effect imports
+import scipy.integrate # ensure sp.integrate.simpson is available (bead area)
 
 from profilePointsClass import profileData
 
@@ -116,6 +117,50 @@ def width_from_bead_edges(profiles: list[profileData]) -> None:
         right = int(bead_idx[np.argmax(p.x[bead_idx])])  # bead point at largest x
         p.beadWidthIdx = np.array([left, right])
         p.beadWidth = float(np.round(abs(p.x[right] - p.x[left]), decimals=2))
+
+def _bead_area_integration(x: np.ndarray, h: np.ndarray) -> float:
+    """Bead cross-section by Simpson integration of the bead height h over x.
+
+    abs() so the result is independent of x direction (profiles are stored with x
+    decreasing in index, which would otherwise flip the integral's sign).
+
+    Known issue: Simpson fits parabolas through point triples, so on the rare profile whose
+    bead-span x is unevenly spaced, non-monotonic, or has near-coincident points (LIDAR jitter
+    at the flanks), the fit overshoots and this area spikes to a wrong value (~1 in 3000 profiles
+    seen >50% off). `shoelaceArea` is piecewise-linear and immune, so it is the robust cross-check.
+    """
+    return abs(float(sp.integrate.simpson(h, x=x)))
+
+def _bead_area_shoelace(x: np.ndarray, h: np.ndarray) -> float:
+    """Bead cross-section by the shoelace formula on the closed polygon: the bead surface
+    (x, h) plus the floor baseline (h = 0) that connects its two ends."""
+    px = np.concatenate([x, [x[-1], x[0]]])   # close along the baseline (two h = 0 corners)
+    ph = np.concatenate([h, [0.0, 0.0]])
+    return 0.5 * float(abs(np.dot(px, np.roll(ph, 1)) - np.dot(ph, np.roll(px, 1))))
+
+def measure_bead_area(profiles: list[profileData]) -> None:
+    """Cross-sectional bead area, two ways, above the shared median floor (z = 0 after
+    rotate_and_shift_uniform levels every profile to it — deliberately NOT each profile's own fit).
+
+    Across the bead span (leftmost to rightmost bead point of floorMask) the height above the
+    median floor is simply z. `area` integrates it with Simpson's rule; `shoelaceArea` is the
+    shoelace area of the polygon bounded by the bead surface and the z = 0 baseline. The two use
+    different numerical schemes and should agree closely (a cross-check). Units: profile-unit^2
+    (1 unit = 0.01 mm, so 1 area unit = 1e-4 mm^2). NaN when a profile has fewer than two bead
+    points (no floorMask, or flat). Run after grow_profile_points.
+    """
+    for p in profiles:
+        p.area = np.nan
+        p.shoelaceArea = np.nan
+        if p.floorMask is None:
+            continue
+        bead_idx = np.flatnonzero(~p.floorMask)
+        if bead_idx.size < 2:
+            continue
+        sl = slice(int(bead_idx.min()), int(bead_idx.max()) + 1)  # contiguous bead span, edge to edge
+        x, h = p.x[sl], p.z[sl]                                    # h = height above the z = 0 median floor
+        p.area = float(np.round(_bead_area_integration(x, h), decimals=2))
+        p.shoelaceArea = float(np.round(_bead_area_shoelace(x, h), decimals=2))
 
 def translate_floor_to_zero(profiles: list[profileData]):
     for p in profiles:

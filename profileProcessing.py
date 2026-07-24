@@ -13,6 +13,7 @@ from profileProcessingAlgorithms import (
     find_smooth_slope,
     flag_flat_profiles,
     grow_profile_points,
+    measure_bead_area,
     rotate_and_shift_uniform,
     width_from_bead_edges,
     width_from_smoothed_slope,
@@ -53,6 +54,8 @@ def process_profiles(profiles: list[profileData]) -> list[profileData]:
     find_smooth_slope(profiles)
     width_from_smoothed_slope(profiles)  # -> peaks, width
     width_from_bead_edges(profiles)      # -> beadWidthIdx, beadWidth
+    # cross-sectional bead area above the median floor, two ways (integration + shoelace)
+    measure_bead_area(profiles)          # -> area, shoelaceArea
     # Optional steps in profileProcessingAlgorithms (import + call to enable): rotate_pointcloud
     # + translate_floor_to_zero (per-profile levelling).
     return profiles

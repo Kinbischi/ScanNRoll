@@ -29,8 +29,6 @@ END_PROFILE = None
 PROFILE_STEP = 1
 POINT_STEP = 1
 
-
-# %% Load raw ("before") and processed ("after") — both from files, no processing here
 # raw       : unprocessed x/z straight from the sensor HDF5 (not levelled)
 # processed : the levelled cache written by profileProcessing.py (peaks / width / isFlat)
 raw = load_profiles(RAW_FILE, START_PROFILE, END_PROFILE)
@@ -75,5 +73,16 @@ pl = profile3Dplotting.plottingClass(len(processed))
 pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
 pl.plot(processed, "widthPoints", "red", size=15, spheres=True)       # slope-peak method
 pl.plot(processed, "beadWidthPoints", "blue", size=15, spheres=True)  # outer-bead-point method
+pl.show()
+
+
+# %% 3D - bead heat-map with a live feature selector (needs a reprocessed cache for area/shoelaceArea)
+# Colour the bead points by a per-profile feature; click a button in the left-edge panel to switch
+# the active feature in real time. The colour bar rescales per feature (area ~1e6 vs width ~1e3),
+# flat profiles have no bead points so they drop out, and NaN values show grey. Interactive
+# window only (the buttons need the native VTK window).
+pl = profile3Dplotting.plottingClass(len(processed))
+pl.plot_feature_heatmap(processed, features=("beadWidth", "width", "area", "shoelaceArea"),
+                        initial="beadWidth", profile_step=PROFILE_STEP, point_step=POINT_STEP)
 pl.show()
 

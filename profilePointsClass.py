@@ -22,8 +22,8 @@ class profileData:
     beadWidth: Optional[float] = None          # x-span between the two outer bead points
     isFlat: Optional[bool] = None
     flatness: Optional[float] = None
-    area: Optional[float] = None
-    shoelaceArea: Optional[float] = None
+    area: Optional[float] = None           # bead cross-section, Simpson integration (profile-unit^2)
+    shoelaceArea: Optional[float] = None   # bead cross-section, shoelace polygon (profile-unit^2)
     shoelaceArea2: Optional[float] = None
     maxSmoothedHeight: Optional[float] = None
     maxSmoothedPlace: Optional[int] = None
