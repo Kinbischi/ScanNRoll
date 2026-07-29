@@ -30,6 +30,20 @@ class profileData:
     maxHeight: Optional[float] = None
     maxPlace: Optional[int] = None
 
+    # --- Absolute time + PLC machine log, joined by timestamp (see plcData.join_plc_to_profiles) ---
+    arrivalTime: Optional[float] = None        # capture-PC Unix timestamp (from raw sensor arrival_time)
+    sensorTime: Optional[float] = None         # sensor clock (timestamp_sec+usec); low-jitter dt
+    mortarPumpFlow: Optional[float] = None
+    pressurePipeEnd: Optional[float] = None
+    pressurePipeStart: Optional[float] = None
+    pressurePrintHead: Optional[float] = None
+    printHeadMixxingSpeed: Optional[float] = None
+    printHeadTorque: Optional[float] = None
+    rollerbandHeight: Optional[float] = None
+    rollerbandSpeed: Optional[float] = None
+    viscoPump1_VMAflow: Optional[float] = None
+    viscoPump2_AcceleratorFlow: Optional[float] = None
+
     """
     # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")
     def integrate_area(self):

@@ -6,6 +6,8 @@ of re-running the (heavy raw load +) processing pipeline every time.
 """
 import logging
 
+from datasetConfig import PLC_FILE, PROCESSED_FILE, RAW_FILE
+from plcData import join_plc_to_profiles, load_plc_csv
 from profileLoading import count_profiles, load_profiles, save_profiles
 from profilePointsClass import profileData
 from profileProcessingAlgorithms import (
@@ -22,12 +24,12 @@ from profileProcessingAlgorithms import (
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-RAW_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercontentchangeExp2Sensor.h5"
-PROCESSED_FILE = "HDf5data/RealExperiments/ClayAndWater_2026_05_28/Exp3/watercontentchangeExp2Sensor_processed.h5"
+# RAW_FILE / PROCESSED_FILE / PLC_FILE come from datasetConfig (switch datasets there).
 
 # Process only the profiles in the index range [START_PROFILE:END_PROFILE) (0-based,
-# END exclusive). START_PROFILE = 0 and END_PROFILE = None processes everything.
-START_PROFILE = 58000
+# END exclusive). START_PROFILE = 0 and END_PROFILE = None processes everything. The PLC
+# join then trims this to the profiles overlapping the PLC log (see main).
+START_PROFILE = 0
 END_PROFILE = None
 
 # Floor/bead categorisation height basis, chosen separately for the seed and grow steps.
@@ -71,8 +73,23 @@ def main() -> None:
     logger.info("Processing profiles [%d:%d] of %d", start, end, total)
     profiles = load_profiles(RAW_FILE, start, end)
     process_profiles(profiles)
-    save_profiles(profiles, PROCESSED_FILE, kind="processed", source_file=RAW_FILE)
-    logger.info("Done: wrote %d processed profiles to %s", len(profiles), PROCESSED_FILE)
+
+    # Join the machine PLC log by timestamp. This drops profiles outside the mutual overlap;
+    # record the surviving raw index span (a contiguous head/tail trim, arrival_time being
+    # monotonic) so dataAnalysis can load the matching raw slice for the overlay cell.
+    plc = load_plc_csv(PLC_FILE)
+    covered = [i for i, p in enumerate(profiles)
+               if p.arrivalTime is not None and plc.time[0] <= p.arrivalTime <= plc.time[-1]]
+    if not covered:
+        raise ValueError("No profiles overlap the PLC log time window")
+    raw_start, raw_end = start + covered[0], start + covered[-1] + 1
+    profiles = join_plc_to_profiles(profiles, plc)
+    assert raw_end - raw_start == len(profiles), "PLC coverage is not a contiguous profile block"
+
+    save_profiles(profiles, PROCESSED_FILE, kind="processed", source_file=RAW_FILE,
+                  raw_start=raw_start, raw_end=raw_end)
+    logger.info("Done: wrote %d processed profiles to %s (raw span [%d:%d])",
+                len(profiles), PROCESSED_FILE, raw_start, raw_end)
 
 
 if __name__ == "__main__":

@@ -45,6 +45,12 @@ def count_profiles(fileName: str) -> int:
         return sum(1 for name in f.keys() if name.startswith("profile_"))
 
 
+def read_file_attrs(fileName: str) -> dict:
+    """Return an HDF5 file's file-level attributes (e.g. kind, source_file, raw_start/raw_end)."""
+    with h5py.File(fileName, "r") as f:
+        return {key: f.attrs[key] for key in f.attrs}
+
+
 def load_profiles(fileName: str, start: int = 0, end: int | None = None) -> list[profileData]:
     """Load profileData objects from an HDF5 file into a list.
 
@@ -85,6 +91,16 @@ def load_profiles(fileName: str, start: int = 0, end: int | None = None) -> list
                 if key == "name" or key not in known:
                     continue
                 setattr(prof, key, group.attrs[key])
+            # Absolute capture time: raw acquisition files store it as `arrival_time`, but the
+            # profileData field is `arrivalTime`, so the generic loop above skips it. Map it
+            # explicitly (processed files already carry `arrivalTime` and are handled above).
+            if prof.arrivalTime is None and "arrival_time" in group.attrs:
+                prof.arrivalTime = float(group.attrs["arrival_time"])
+            # Sensor clock: raw files store timestamp_sec + timestamp_usec separately; combine into
+            # sensorTime (seconds) for a precise, low-jitter inter-profile dt (physical plot spacing).
+            if prof.sensorTime is None and "timestamp_sec" in group.attrs:
+                usec = float(group.attrs.get("timestamp_usec", 0))
+                prof.sensorTime = float(group.attrs["timestamp_sec"]) + usec / 1e6
             # Re-derive the flat flag from the cached (threshold-independent) metric so
             # FLATNESS_RMS_THRESHOLD can be tuned without reprocessing the cache.
             if prof.flatness is not None and np.isfinite(prof.flatness):
