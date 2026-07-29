@@ -9,6 +9,14 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Changed
+- **Physical profile spacing in the 3D layout.** `plottingClass` now places each profile along the
+  print path by its real along-track advance — `rollerbandSpeed` (m/s) × the inter-profile dt — via
+  the new `profile_advance_distances`, instead of a uniform 20 mm gap. dt comes from the sensor
+  clock (new `profileData.sensorTime` = `timestamp_sec` + `timestamp_usec`, loaded from the raw
+  file), falling back to `arrivalTime`, then to a uniform gap when neither speed nor time is present
+  (e.g. raw-only profiles). `plottingClass.__init__` now takes the profiles list (not a count) so it
+  can read those fields, and `add_3d_points_to_plot` / `add_lines_to_plot` share the one physical
+  path instead of each rebuilding a uniform one. Reprocess to populate `sensorTime` in the cache.
 - **`width_from_smoothed_slope` now reports flank feet and is self-contained.** It folds the former
   `find_smooth_slope` smoothing in as locals (so `find_smooth_slope` is gone), and after finding the
   two outermost flank peaks it walks each flank down to its **foot** near the floor
@@ -35,6 +43,41 @@ This project does not yet use formal version numbers; changes accumulate under
   they were never persisted (`_TRANSIENT_FIELDS` is now empty). Old caches still load.
 
 ### Added
+- **Optional voxel downsampling for the 3D clouds.** `plottingClass(profiles, voxel_size=...)` keeps
+  one point per `voxel_size`-cubed voxel (profile units; `None` = off, default) via a new
+  `_maybe_voxel` helper (`np.unique` on binned coords + `PolyData.extract_points`, which carries the
+  heat-map's per-feature scalar arrays along). Cuts the point count/overdraw so the now-densely-spaced
+  layout stays responsive on large sets; composes with `profile_step`/`point_step`. Wired into
+  `dataAnalysis.py` via a `VOXEL_SIZE` knob. (A `points_gaussian` splat mapper was evaluated too but
+  renders invisibly with solid-colour clouds in this PyVista/VTK, so it was not included.)
+- **Central dataset config.** New `datasetConfig.py` holds the active experiment's `RAW_FILE` /
+  `PLC_FILE` (and the derived `PROCESSED_FILE`) in one place, imported by `profileProcessing.py` and
+  `dataAnalysis.py` so their paths can't drift; other datasets are kept as commented blocks for a
+  one-line switch. Switched the active dataset to Exp1 (velocity alterations).
+- **Interactive feature-comparison plot.** New `featureComparison.py` (`compare_features`, backed by
+  a `FeatureComparisonPlot` class) overlays several per-profile features (geometry measures and/or
+  joined PLC channels) as time series on one matplotlib axis, each robustly normalised to 0–1 by
+  percentile clipping (`clip_percentile`, default 1–99) so an outlier spike doesn't flatten the
+  curve. Each legend entry shows both `scale[lo–hi unit]` (the range that maps to 0→1) and
+  `true[min–max]` (the real extremes, so a clipped outlier is visible as `true max` ≫ `scale hi`),
+  and every feature's colour stays in the legend regardless of visibility (bold text marks the
+  currently-shown curves). Left-panel checkboxes toggle each curve ("show") and moving-average-smooth
+  selected curves ("smooth", NaN-aware, fixed scale so the legend doesn't shift), with a slider
+  setting the smoothing window. The x-axis is time-from-start (from `arrivalTime`). Reuses
+  `FEATURE_DISPLAY` for units; new `dataAnalysis.py` cell. Needs a GUI backend for interactivity (as
+  with the PyVista window).
+- **PLC machine-log join by timestamp.** New `plcData.py` loads the machine PLC log
+  (`waterContenExp2PLC.csv`) — parsing Windows FILETIME → Unix, correcting the PLC clock offset
+  (`PLC_CLOCK_OFFSET_S = 564 s`) — into a staging `PlcLog`, and `join_plc_to_profiles()` attaches
+  the **nearest-in-time** PLC sample to each profile. The two streams run at different rates
+  (~226 Hz profiles vs 50 Hz PLC), so the join is by absolute time, not index: profiles carry a new
+  `arrivalTime` field (mapped from the raw sensor `arrival_time` in `load_profiles`) and the 10 PLC
+  channels become flat `profileData` fields, auto-persisted by the generic I/O and selectable as
+  heat-map features (each its own colour range). Profiles outside the streams' mutual overlap are
+  dropped; `profileProcessing` records the surviving raw span as `raw_start`/`raw_end` file attrs
+  (read via the new `read_file_attrs()`), so `dataAnalysis` loads the matching raw slice
+  automatically. Runs in `profileProcessing.main` after the geometry pipeline (full range by
+  default); reprocess to populate.
 - **Robust bead height (two measures).** `measure_bead_height()` in `profileProcessingAlgorithms.py`
   sets `profileData.beadHeight` (95th percentile, `HEIGHT_PERCENTILE`, of the bead points' z) and
   `beadHeightSmooth` (max of a median-smoothed profile, `MEDIAN_SMOOTH_WINDOW`) above the shared

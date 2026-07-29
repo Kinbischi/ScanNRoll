@@ -27,7 +27,10 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
       smoothing windows `15/9/5/5/65/55/15/5`; peak `height=0.15`, `distance=50`;
       border/height threshold `20`; baseline `borderPoints=30`, error `50`;
       print-path geometry `2000`, `5000`, `80000`; UDP `192.168.0.251:1234`.
-      Document each with its meaning and unit (~0.01 mm).
+      Document each with its meaning and unit (~0.01 mm). Also a candidate: the `FEATURE_DISPLAY`
+      map (feature → unit factor + label), now defined in `profile3Dplotting.py` but imported by
+      `featureComparison.py` too — a neutral config module would avoid the plotting-to-plotting
+      import (which currently pulls in PyVista for the matplotlib-only comparison view).
 - [ ] **Replace wildcard imports** (`from x import *`) with explicit imports,
       module by module as files are touched. Start with the entry points.
 - [ ] **Add type hints + docstrings** incrementally to the processing functions in
@@ -57,8 +60,10 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
       tooling is wanted. Wire the commands listed in [CLAUDE.md](CLAUDE.md) §17.
 - [ ] **Clarify the coordinate mapping** in plotting (height → PyVista y slot) —
       either rename for clarity or document inline; see ARCHITECTURE.md §5.
-- [ ] **Consume HDF5 metadata** on the analysis side (timestamps, encoder, quality)
-      — currently written by the capturer but ignored by `load_profiles`.
+- [ ] **Consume the remaining HDF5 metadata** on the analysis side (encoder, quality). The
+      `arrival_time` timestamp is now consumed (mapped to `profileData.arrivalTime`, used for the
+      PLC timestamp join); encoder position and quality are still written but ignored by
+      `load_profiles`.
 - [x] ~~**Avoid loading the whole raw file when only a slice is needed.**~~ Done —
       `load_profiles(fileName, start, end)` reads only the range and `count_profiles()`
       gives a fast pre-check. See [CHANGELOG.md](CHANGELOG.md).
