@@ -1,5 +1,8 @@
+from typing import cast
+
 import numpy as np
 import pyvista as pv
+from plcData import PLC_COLUMNS
 from profilePointsClass import profileData
 
 # Heat-map feature display: feature -> (group, unit factor, unit label). 1 profile unit = 0.01 mm,
@@ -12,21 +15,81 @@ FEATURE_DISPLAY = {
     "beadHeightSmooth": ("height", 0.01, "mm"),
     "area":             ("area",   1e-4, "mm^2"),
     "shoelaceArea":     ("area",   1e-4, "mm^2"),
+    # PLC machine-log channels (joined by timestamp): each its own colour group, since their
+    # magnitudes differ widely. Shown in the PLC's native engineering units (factor 1.0; the
+    # unit label is left blank as the physical units aren't recorded in the CSV).
+    **{name: (name, 1.0, "") for name in PLC_COLUMNS},
 }
+
+# Along-track spacing of profiles in the 3D layout. 1 profile unit = 0.01 mm, so 1 m = 1e5 units.
+# Each profile advances rollerbandSpeed (m/s) * dt (s) along the print path (see
+# profile_advance_distances); when speed/time data is missing, profiles fall back to a uniform gap.
+METERS_TO_PROFILE_UNITS = 1e5
+UNIFORM_PROFILE_DISTANCE = 2000.0  # fallback along-track gap when speed/time is unavailable
+
+
+def profile_advance_distances(profiles: list[profileData]) -> np.ndarray:
+    """Per-profile along-path advance (profile units) from rollerbandSpeed (m/s) x inter-profile dt.
+
+    dt is taken from the sensor clock (`sensorTime` = timestamp_sec + timestamp_usec, monotonic and
+    low-jitter), falling back to `arrivalTime`; the first profile gets 0 (path origin). Missing speed
+    or a non-monotonic step yields 0 advance for that profile. If neither a time base nor
+    `rollerbandSpeed` is available at all (e.g. raw profiles without the PLC join), returns a uniform
+    `UNIFORM_PROFILE_DISTANCE` spacing (the pre-physical behaviour).
+    """
+    n = len(profiles)
+    if n == 0:
+        return np.empty(0)
+    t = np.array([p.sensorTime if p.sensorTime is not None else np.nan for p in profiles], float)
+    if not np.any(np.isfinite(t)):  # no sensor clock (e.g. old cache) -> capture-PC clock
+        t = np.array([p.arrivalTime if p.arrivalTime is not None else np.nan for p in profiles], float)
+    speed = np.array([p.rollerbandSpeed if p.rollerbandSpeed is not None else np.nan for p in profiles], float)
+    if not np.any(np.isfinite(t)) or not np.any(np.isfinite(speed)):
+        return np.full(n, UNIFORM_PROFILE_DISTANCE)
+
+    dist = np.zeros(n)
+    dt = np.diff(t)                             # seconds between consecutive profiles
+    speed_mid = 0.5 * (speed[:-1] + speed[1:])  # mean belt speed over each interval
+    dist[1:] = speed_mid * dt * METERS_TO_PROFILE_UNITS
+    dist[~np.isfinite(dist)] = 0.0             # missing speed/time on a profile -> no advance
+    dist[dist < 0.0] = 0.0                     # guard non-monotonic time
+    return dist
 
 
 class plottingClass:
-    def __init__(self, numOfprofiles):
+    def __init__(self, profiles: list[profileData], voxel_size: float | None = None):
+        """Build the 3D print path from the profiles' physical along-track advance (see
+        profile_advance_distances). `profiles` must be the same list (order/length) later passed to
+        `plot()`, so each profile lands at its path point. Prefer the processed (PLC-joined) profiles,
+        which carry `rollerbandSpeed`; without it the layout falls back to a uniform gap.
+
+        `voxel_size` (default None = off) downsamples the dense clouds to one point per voxel — a
+        float in profile units (1 unit = 0.01 mm) — cutting the point count (and overdraw/memory) to
+        keep large sets responsive. Off ⇒ renders identically to before.
+        """
         self.plotter = pv.Plotter()
-        
-        distances = np.ones(numOfprofiles) * 2000  # 2.0 units between each profile
+        self._voxel_size = voxel_size
+
+        distances = profile_advance_distances(profiles)
         self.pathPoints, self.tiltAngles = compute_print_path_and_angle(distances)
         self.rotation_matrices = [np.array([
             [np.cos(theta), 0, np.sin(theta)],
             [0, 1, 0],
             [-np.sin(theta), 0, np.cos(theta)]
         ]) for theta in self.tiltAngles]
-        
+
+    def _maybe_voxel(self, cloud: "pv.DataSet") -> "pv.DataSet":
+        """Downsample a point cloud to one point per `self._voxel_size` voxel (off when None).
+
+        Bins points on a grid and keeps the first in each occupied voxel. `extract_points` carries
+        every point-data array along, so a heat-map cloud's per-feature scalars stay aligned.
+        """
+        if not self._voxel_size:
+            return cloud
+        key = np.floor(cloud.points / self._voxel_size).astype(np.int64)
+        _, idx = np.unique(key, axis=0, return_index=True)
+        return cast("pv.DataSet", cloud.extract_points(np.sort(idx)))
+
     def show(self):
         self.plotter.add_camera_orientation_widget()
         self.plotter.show()
@@ -74,34 +137,29 @@ class plottingClass:
                 self.add_3d_points_to_plot(width_point_arrays(profiles, "beadWidthIdx"), colour, size, spheres=spheres)
 
     def add_3d_points_to_plot(self,points, colour = 'green', point_size=5, spheres=False):
-        distances = np.ones(len(points)) * 2000  # 2.0 units between each profile
-
-        pathPoints,tiltAngles = compute_print_path_and_angle(distances)
-
-        # Collect every profile's transformed points and add them as a single actor.
-        # One add_points call instead of one per profile is far faster for many profiles.
+        # Collect every profile's transformed points and add them as a single actor, placed along the
+        # shared physical print path (self.pathPoints, built in __init__). One add_points call instead
+        # of one per profile is far faster for many profiles.
         transformed = []
         for i, prof in enumerate(points):
             if prof.shape[0] > 0:
                 prof = prof @ self.rotation_matrices[i].T  # rotate to match path direction
-                transformed.append(pathPoints[i] + prof)
+                transformed.append(self.pathPoints[i] + prof)
 
         if transformed:
             cloud = pv.PolyData(np.vstack(transformed))
+            if not spheres:  # dense cloud: downsample; markers (spheres) stay full so both show
+                cloud = self._maybe_voxel(cloud)
             self.plotter.add_points(cloud, color=colour, point_size=point_size, render_points_as_spheres=spheres)
-            
+
     def add_lines_to_plot(self, linePoints, colour = 'green'):
-        distances = np.ones(len(linePoints)) * 2000  # 2.0 units between each profile
-
-        pathPoints,tiltAngles = compute_print_path_and_angle(distances)
-
-        # Collect every line's two transformed endpoints and add them all as a single mesh.
-        # One add_mesh call instead of one per line is far faster for many profiles.
+        # Collect every line's two transformed endpoints and add them all as a single mesh, placed
+        # along the shared physical print path. One add_mesh call is far faster for many profiles.
         endpoints = []
         for i in range(len(linePoints)):
             rot_matrix = self.rotation_matrices[i]
-            p0 = np.asarray(linePoints[i][0], dtype=float) @ rot_matrix.T + pathPoints[i]  # rotate + translate to path
-            p1 = np.asarray(linePoints[i][1], dtype=float) @ rot_matrix.T + pathPoints[i]
+            p0 = np.asarray(linePoints[i][0], dtype=float) @ rot_matrix.T + self.pathPoints[i]  # rotate + translate to path
+            p1 = np.asarray(linePoints[i][1], dtype=float) @ rot_matrix.T + self.pathPoints[i]
             endpoints.append(p0)
             endpoints.append(p1)
 
@@ -155,6 +213,9 @@ class plottingClass:
         cloud = pv.PolyData(np.vstack(transformed))
         for f in features:
             cloud[f] = np.concatenate(columns[f])
+        # Downsample before clim/store so the reduced cloud is what's coloured and live-switched;
+        # extract_points carries the per-feature scalar arrays along.
+        cloud = self._maybe_voxel(cloud)
         cloud.set_active_scalars(initial)
 
         # features in the same group share one colour range, computed over the whole group's values
