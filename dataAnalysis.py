@@ -10,6 +10,7 @@ from datasetConfig import PROCESSED_FILE, RAW_FILE
 from featureComparison import compare_features
 from plcData import PLC_COLUMNS
 from profileLoading import load_profiles, read_file_attrs
+from profileProcessingAlgorithms import unlevel_profiles
 
 # In VS Code's Interactive Window / Jupyter, PyVista auto-detects the kernel and renders
 # a static (non-interactive) image (its 'trame' inline backend isn't installed). Forcing
@@ -23,24 +24,28 @@ pv.global_theme.notebook = False
 # 3D subsampling for the dense clouds: draw every PROFILE_STEP-th profile and every
 # POINT_STEP-th point (points drawn ~ total / (PROFILE_STEP * POINT_STEP)).
 PROFILE_STEP = 1
-POINT_STEP = 1
+POINT_STEP = 10
 
 # Voxel downsampling to tame lag on large sets (see plottingClass): keep one point per voxel, which
 # cuts the point count (and overdraw/memory). Composes with the subsampling above. In profile units
 # (0.01 mm); set to None to restore the exact old look. Larger = fewer points / less detail.
-VOXEL_SIZE = 90#30
+VOXEL_SIZE = 30
 
 # processed : the levelled cache written by profileProcessing.py (peaks / width / isFlat / PLC)
-# raw       : unprocessed x/z straight from the sensor HDF5 (not levelled), loaded over the SAME
-#   index span the cache covers. The PLC join trims processing to the profiles overlapping the PLC
-#   log and stores that raw span (raw_start/raw_end) on the cache, so raw and processed stay aligned
-#   for the overlay cell without any manual bookkeeping.
+# raw       : unprocessed x/z (not levelled), the "before" for the overlay cell. Reconstructed for
+#   free by inverting the stored uniform leveling transform (level_angle / level_offset) — no second
+#   (slow) load of the raw file. Older caches without the transform fall back to loading the matching
+#   raw slice (raw_start/raw_end span the cache covers).
 processed = load_profiles(PROCESSED_FILE)
 _attrs = read_file_attrs(PROCESSED_FILE)
-RAW_START = int(_attrs.get("raw_start", 0))
-RAW_END = int(_attrs["raw_end"]) if "raw_end" in _attrs else None
-raw = load_profiles(RAW_FILE, RAW_START, RAW_END)
-print(f"{len(raw)} raw / {len(processed)} processed profiles (raw span [{RAW_START}:{RAW_END}])")
+if "level_angle" in _attrs and "level_offset" in _attrs:
+    raw = unlevel_profiles(processed, float(_attrs["level_angle"]), float(_attrs["level_offset"]))
+    print(f"{len(raw)} raw (reconstructed) / {len(processed)} processed profiles")
+else:  # fallback for caches predating the stored transform: load the matching raw slice
+    RAW_START = int(_attrs.get("raw_start", 0))
+    RAW_END = int(_attrs["raw_end"]) if "raw_end" in _attrs else None
+    raw = load_profiles(RAW_FILE, RAW_START, RAW_END)
+    print(f"{len(raw)} raw / {len(processed)} processed profiles (raw span [{RAW_START}:{RAW_END}])")
 
 
 # %% 3D - overlay raw (grey), processed (green), floor baselines (red), z=0 reference (yellow)

@@ -233,9 +233,11 @@ load and the processing pipeline. Same `profile_NNNNNN` group layout:
   default floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor
   clock seconds, for inter-profile dt), and the 10 joined PLC channels (`mortarPumpFlow`,
   `pressure*`, `printHead*`, `rollerband*`, `viscoPump*`).
-- File attributes: `kind = "processed"`, `source_file` (the raw path) for provenance, and
-  `raw_start`/`raw_end` — the raw index span the cache covers (after the PLC-overlap trim), so the
-  plot workbench can load the matching raw slice.
+- File attributes: `kind = "processed"`, `source_file` (provenance), `raw_start`/`raw_end` (the raw
+  index span the cache covers, after the PLC-overlap trim), and `level_angle`/`level_offset` — the
+  uniform leveling transform. The plot workbench reconstructs the pre-leveling ("before") x/z by
+  inverting it (`unlevel_profiles`) instead of reloading the raw file; `raw_start`/`raw_end` remain
+  as provenance and the fallback for caches predating the stored transform.
 
 The default (floor-based) flat method caches `isFlat` directly and leaves `flatness` unset;
 `load_profiles` only re-derives `isFlat = flatness < FLATNESS_RMS_THRESHOLD` for the optional

@@ -220,7 +220,9 @@ def rotate_and_shift_uniform(profiles: list[profileData]):
 
     Applies the median per-profile tilt and floor offset to every profile, so the real
     height differences between profiles are preserved (only a common tilt/offset removed).
-    Median is robust to the bad baseline fits of beaded profiles.
+    Median is robust to the bad baseline fits of beaded profiles. Returns the uniform transform
+    as ``(angle, offset)`` (angle in radians) so it can be inverted later to recover the
+    pre-leveling coordinates without reloading the raw file (see ``unlevel_profiles``).
     """
     # median tilt angle across profiles (from each floor slope)
     angles = []
@@ -255,7 +257,26 @@ def rotate_and_shift_uniform(profiles: list[profileData]):
             p.b -= offset  # keep the stored intercept in the final (shifted) coordinates
 
     print(f"rotate_and_shift_uniform: angle = {np.degrees(angle):.3f} deg, shift = {offset:.2f}")
-    return profiles
+    return angle, offset
+
+
+def unlevel_profiles(profiles: list[profileData], angle: float, offset: float) -> list[profileData]:
+    """Invert `rotate_and_shift_uniform` to recover each profile's pre-leveling (raw) x/z.
+
+    The forward leveling is one uniform transform for every profile — rotate by `R` (from `angle`,
+    radians) then subtract `offset` from z — so it is exactly invertible: add the offset back, then
+    rotate by `R` (`R` is orthogonal, so `@ R` undoes the forward `@ R.T`). Returns new lightweight
+    `profileData` (name + raw x/z only) — enough to draw the "before" overlay without reloading the
+    raw file. Exact for the uniform leveling only; the dormant per-profile levelling would need
+    per-profile parameters instead.
+    """
+    c, s = np.cos(angle), np.sin(angle)
+    R = np.array([[c, -s], [s, c]])
+    restored = []
+    for p in profiles:
+        pts = np.column_stack((p.x, p.z + offset)) @ R  # unshift z, then unrotate
+        restored.append(profileData(p.name, pts[:, 0], pts[:, 1]))
+    return restored
 
 
 # z above this (~1 mm) seeds a confident bead point; at/below it is floor.

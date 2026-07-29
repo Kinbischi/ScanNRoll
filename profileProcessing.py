@@ -40,14 +40,15 @@ SEED_USE_PROFILE_BASELINE = True   # categorize_floor_points
 GROW_USE_PROFILE_BASELINE = False  # grow_profile_points
 
 
-def process_profiles(profiles: list[profileData]) -> list[profileData]:
-    """Run the full per-profile processing pipeline in place and return the list.
+def process_profiles(profiles: list[profileData]) -> tuple[list[profileData], float, float]:
+    """Run the full per-profile processing pipeline in place; return (profiles, angle, offset).
 
-    Order matters: level and rotate to the floor first, then smooth and measure
-    width on the levelled profile.
+    Order matters: level and rotate to the floor first, then smooth and measure width on the
+    levelled profile. The returned (angle, offset) is the uniform leveling transform (angle in
+    radians) — saved to the cache so the before/after overlay can be reconstructed by inverting it.
     """
     # uniform: one median rotation + shift for all profiles (keeps relative heights)
-    rotate_and_shift_uniform(profiles)
+    level_angle, level_offset = rotate_and_shift_uniform(profiles)
     # seed floor vs bead points, then grow the bead into its connected lower flanks
     categorize_floor_points(profiles, use_profile_baseline=SEED_USE_PROFILE_BASELINE)
     grow_profile_points(profiles, use_profile_baseline=GROW_USE_PROFILE_BASELINE)
@@ -60,7 +61,7 @@ def process_profiles(profiles: list[profileData]) -> list[profileData]:
     measure_bead_area(profiles)          # -> area, shoelaceArea
     # Optional steps in profileProcessingAlgorithms (import + call to enable): rotate_pointcloud
     # + translate_floor_to_zero (per-profile levelling).
-    return profiles
+    return profiles, level_angle, level_offset
 
 
 def main() -> None:
@@ -72,7 +73,7 @@ def main() -> None:
 
     logger.info("Processing profiles [%d:%d] of %d", start, end, total)
     profiles = load_profiles(RAW_FILE, start, end)
-    process_profiles(profiles)
+    profiles, level_angle, level_offset = process_profiles(profiles)
 
     # Join the machine PLC log by timestamp. This drops profiles outside the mutual overlap;
     # record the surviving raw index span (a contiguous head/tail trim, arrival_time being
@@ -87,7 +88,8 @@ def main() -> None:
     assert raw_end - raw_start == len(profiles), "PLC coverage is not a contiguous profile block"
 
     save_profiles(profiles, PROCESSED_FILE, kind="processed", source_file=RAW_FILE,
-                  raw_start=raw_start, raw_end=raw_end)
+                  raw_start=raw_start, raw_end=raw_end,
+                  level_angle=level_angle, level_offset=level_offset)
     logger.info("Done: wrote %d processed profiles to %s (raw span [%d:%d])",
                 len(profiles), PROCESSED_FILE, raw_start, raw_end)
 

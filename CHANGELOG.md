@@ -43,6 +43,14 @@ This project does not yet use formal version numbers; changes accumulate under
   they were never persisted (`_TRANSIENT_FIELDS` is now empty). Old caches still load.
 
 ### Added
+- **Store the leveling transform so the before/after overlay needs no raw reload.**
+  `rotate_and_shift_uniform` now returns its uniform `(angle, offset)`, `process_profiles` passes it
+  out, and `profileProcessing` saves it on the cache as `level_angle`/`level_offset`. The new
+  `unlevel_profiles()` inverts that transform to reconstruct each profile's pre-leveling x/z exactly
+  (the transform is uniform, applied first, and the only x/z mutator), so `dataAnalysis` builds the
+  grey "before" overlay from `processed` alone — the multi-minute second load of the raw file is
+  gone (with a fallback to the old raw-slice load for caches predating the attrs). Reprocess to
+  populate them.
 - **Optional voxel downsampling for the 3D clouds.** `plottingClass(profiles, voxel_size=...)` keeps
   one point per `voxel_size`-cubed voxel (profile units; `None` = off, default) via a new
   `_maybe_voxel` helper (`np.unique` on binned coords + `PolyData.extract_points`, which carries the
