@@ -6,7 +6,7 @@
 import pyvista as pv
 
 import profile3Dplotting
-from datasetConfig import PROCESSED_FILE, RAW_FILE
+from datasetConfig import PROCESSED_FILE
 from featureComparison import compare_features
 from plcData import PLC_COLUMNS
 from profileLoading import load_profiles, read_file_attrs
@@ -19,42 +19,32 @@ from profileProcessingAlgorithms import unlevel_profiles
 # trame + trame-vtk and use pv.set_jupyter_backend("trame") if you want interactive INLINE.
 pv.global_theme.notebook = False
 
-# RAW_FILE / PROCESSED_FILE come from datasetConfig (switch datasets there).
+# PROCESSED_FILE comes from datasetConfig (switch datasets there).
 
 # 3D subsampling for the dense clouds: draw every PROFILE_STEP-th profile and every
 # POINT_STEP-th point (points drawn ~ total / (PROFILE_STEP * POINT_STEP)).
 PROFILE_STEP = 1
-POINT_STEP = 10
+POINT_STEP = 1
 
-# Voxel downsampling to tame lag on large sets (see plottingClass): keep one point per voxel, which
-# cuts the point count (and overdraw/memory). Composes with the subsampling above. In profile units
-# (0.01 mm); set to None to restore the exact old look. Larger = fewer points / less detail.
-VOXEL_SIZE = 30
+# Voxel downsampling (see plottingClass): overlay a 3-D grid of cubes and keep ONE point per cube,
+# thinning dense areas to cut lag/overdraw/memory. Composes with PROFILE_STEP / POINT_STEP above.
+# VOXEL_SIZE = cube edge in profile units (0.01 mm), so 100 = a 1 mm cube; larger = fewer points;
+# None = off. NB the cubes bin height too, so it is not a uniform on-screen spacing: steep bead
+# flanks keep points stacked ~VOXEL_SIZE apart in height (expected, not a bug).
+VOXEL_SIZE = 10
 
-# processed : the levelled cache written by profileProcessing.py (peaks / width / isFlat / PLC)
+# processed : the levelled columnar cache written by profileProcessing.py (points / width / PLC / ...)
 # raw       : unprocessed x/z (not levelled), the "before" for the overlay cell. Reconstructed for
-#   free by inverting the stored uniform leveling transform (level_angle / level_offset) — no second
-#   (slow) load of the raw file. Older caches without the transform fall back to loading the matching
-#   raw slice (raw_start/raw_end span the cache covers).
+#   free by inverting the stored uniform leveling transform (level_angle / level_offset), so no second
+#   (slow) load of the raw file is needed — every columnar cache carries the transform.
 processed = load_profiles(PROCESSED_FILE)
 _attrs = read_file_attrs(PROCESSED_FILE)
-if "level_angle" in _attrs and "level_offset" in _attrs:
-    raw = unlevel_profiles(processed, float(_attrs["level_angle"]), float(_attrs["level_offset"]))
-    print(f"{len(raw)} raw (reconstructed) / {len(processed)} processed profiles")
-else:  # fallback for caches predating the stored transform: load the matching raw slice
-    RAW_START = int(_attrs.get("raw_start", 0))
-    RAW_END = int(_attrs["raw_end"]) if "raw_end" in _attrs else None
-    raw = load_profiles(RAW_FILE, RAW_START, RAW_END)
-    print(f"{len(raw)} raw / {len(processed)} processed profiles (raw span [{RAW_START}:{RAW_END}])")
+raw = unlevel_profiles(processed, float(_attrs["level_angle"]), float(_attrs["level_offset"]))
+print(f"{len(raw)} raw (reconstructed) / {len(processed)} processed profiles")
 
 
 # %% 3D - overlay raw (grey), processed (green), floor baselines (red), z=0 reference (yellow)
-# Requires raw and processed to be the SAME profiles: the loader cell above loads raw over the
-# cache's stored raw_start/raw_end span, so this holds automatically after a reprocess.
-assert len(raw) == len(processed), (
-    f"raw ({len(raw)}) and processed ({len(processed)}) differ; reprocess the cache so its stored "
-    "raw span matches, or check RAW_START/RAW_END."
-)
+# raw is reconstructed from processed (same profiles, 1:1), so the two clouds overlay directly.
 pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)  # path from processed (carries rollerbandSpeed); raw is aligned
 pl.plot(raw, "profile", "grey", profile_step=PROFILE_STEP, point_step=POINT_STEP)
 pl.plot(processed, "profile", "green", profile_step=PROFILE_STEP, point_step=POINT_STEP)

@@ -67,10 +67,14 @@ Priorities: **P1** = correctness / blocks future work · **P2** = maintainabilit
 - [x] ~~**Avoid loading the whole raw file when only a slice is needed.**~~ Done —
       `load_profiles(fileName, start, end)` reads only the range and `count_profiles()`
       gives a fast pre-check. See [CHANGELOG.md](CHANGELOG.md).
-- [ ] **Smoother large-cloud rendering beyond subsampling.** `plot()` now supports
-      `profile_step`/`point_step` decimation (~37M points lags otherwise). If full
-      detail with smooth interaction is needed, investigate a VTK level-of-detail
+- [ ] **Smoother large-cloud rendering beyond subsampling.** `plot()` supports
+      `profile_step`/`point_step` decimation, and `plottingClass(voxel_size=…)` now spatially
+      downsamples to one point per voxel (a fast 1-D-keyed unique) — both cut the ~37M-point lag.
+      If full detail with smooth interaction is still needed, investigate a VTK level-of-detail
       actor (full resolution when still, decimated while interacting).
+- [ ] **`phi` possibly-unbound in `compute_print_path_and_angle`** (`profile3Dplotting.py`): the
+      static checker flags `phi` on the straight→curve tilt branch; safe at runtime (it is set
+      whenever the curve branch runs) but worth initialising `phi = 0.0` to silence it.
 
 ---
 

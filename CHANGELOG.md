@@ -8,6 +8,26 @@ This project does not yet use formal version numbers; changes accumulate under
 
 ## [Unreleased]
 
+### Performance
+- **Much faster processed-cache load (columnar "table" layout).** `save_profiles` now writes the
+  processed cache as a columnar table — every per-profile field is one array keyed by profile index,
+  instead of a `profile_NNNNNN` group each: `/points/x`, `/points/z`, `/points/floorMask` as padded
+  `[N, L]` matrices (+ `/points/lengths`), `/points/peaks` & `/points/beadWidthIdx` as `[N, 2]` int
+  (`-1` = absent), `/scalars/<field>` as `[N]` float64 (NaN = unset), and `/names`. Loading collapses
+  from ~450k tiny per-object reads to a handful of bulk reads: **measured 20k-slice load 18.3 s →
+  1.09 s (~17×), projected ~142 s → ~5 s** for the full 90.7k Exp1 cache. `load_profiles` reads this
+  layout (via the `layout` file attr) and still reads the legacy per-group-attribute layout and raw
+  acquisition files transparently. Padded storage fits the sensor's near-fixed profile width
+  (negligible waste). Verified **byte-for-byte lossless**: all 33 fields × 23k real profiles
+  identical (round-trip of a cache slice + a freshly-processed raw slice), plus edge cases (shortest
+  profile, absent `peaks`/`beadWidthIdx` → None, flat profiles). Reprocess
+  (`python profileProcessing.py`) to convert a cache; existing caches keep loading via the fallback.
+- **Faster voxel downsampling.** `plottingClass._maybe_voxel` flattens the 3-D voxel index to one
+  int64 key (bijective `ravel_multi_index`) so uniqueness is a 1-D sort instead of
+  `np.unique(axis=0)`'s 3-column lexsort — **~5× faster** (6.0 s → 1.2 s on a 5.5 M-point cloud) with
+  byte-identical output (same first point kept per voxel; exact row-wise fallback if the flattened
+  index would overflow int64). Cuts the overlay cell's two voxel passes from ~13 s to ~2.5 s.
+
 ### Changed
 - **Physical profile spacing in the 3D layout.** `plottingClass` now places each profile along the
   print path by its real along-track advance — `rollerbandSpeed` (m/s) × the inter-profile dt — via
@@ -25,6 +45,14 @@ This project does not yet use formal version numbers; changes accumulate under
   indices. Reprocess to refresh.
 
 ### Removed
+- **Retired the legacy per-group processed-cache reader.** Now that the processed cache is the
+  columnar table, `load_profiles` reads only that (`layout="columnar"`) and raw acquisition files
+  (`profile_NNNNNN` groups → `x`/`z` + `arrival_time`/`timestamp_*`, via the slimmed `_load_raw`). An
+  old per-group *processed* cache (`kind="processed"`, no `layout`) is now rejected with a clear
+  "reprocess to the columnar layout" error instead of loaded partially — reprocess old Exp2/Exp3
+  caches before use. Also dropped `dataAnalysis`'s raw-reload fallback (every columnar cache carries
+  the leveling transform, so the overlay's raw is always reconstructed) and the now-unused `RAW_FILE`
+  import there.
 - **Dead-code cleanup (behaviour-preserving).** Deleted the unused pre-HDF5 CSV loaders
   (`plotProfiles`, `loadProfiles`, `groupProfiles`) and `find_border_points`, the orphaned
   `profileData.borderPoints` field, and now-unused imports (`matplotlib`, `pathlib`, `os`,

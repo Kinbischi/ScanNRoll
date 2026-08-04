@@ -42,17 +42,19 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline and module map.
 
 ```
 Python/
-├── rawProfileUdpCapturing.py                       # ACTIVE  acquisition: sensor → HDF5
-├── profileProcessing.py                    # ACTIVE  process entry point: raw → processed cache
-├── dataAnalysis.py                       # ACTIVE  plot workbench (# %% cells): load raw+cache → 3D plot
+├── rawProfileUdpCapturing.py             # ACTIVE  acquisition: sensor → HDF5
+├── datasetConfig.py                      # ACTIVE  central dataset paths (RAW / PLC / derived PROCESSED)
+├── profileProcessing.py                  # ACTIVE  process entry point: raw → processed cache
+├── dataAnalysis.py                       # ACTIVE  plot workbench (# %% cells): cache → 3D plot (raw "before" reconstructed)
 ├── profilePointsClass.py                 # ACTIVE  profileData dataclass ONLY (pure data model)
 ├── profileProcessingAlgorithms.py        # ACTIVE  processing algorithms (rotate/level/smooth/width/flatness)
-├── profileLoading.py                     # ACTIVE  load_profiles/save_profiles (HDF5 I/O)
-├── profile3Dplotting.py                 # ACTIVE  PyVista 3D plotting + print-path geometry
+├── profileLoading.py                     # ACTIVE  load_profiles/save_profiles (HDF5 columnar-cache I/O)
+├── plcData.py                            # ACTIVE  PLC machine-log CSV load + timestamp join
+├── profile3Dplotting.py                  # ACTIVE  PyVista 3D plotting + print-path geometry
+├── featureComparison.py                  # ACTIVE  matplotlib 2D feature-vs-time comparison plot
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
-├── LidarProfileAnalysis_oldRegistration.py  # LEGACY  old entry point
 ├── HDf5data/  ProfileData/  Pics/        # data & outputs (git-ignored)
-├── old/  RandomOther/  testGIthubCircleSquare/  # scratch / experiments
+├── old/  RandomOther/  testGIthubCircleSquare/  # scratch / experiments (incl. old entry points)
 └── *.md, requirements.txt, .gitignore    # docs & scaffolding
 ```
 

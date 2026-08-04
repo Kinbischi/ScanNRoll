@@ -63,9 +63,11 @@ class plottingClass:
         `plot()`, so each profile lands at its path point. Prefer the processed (PLC-joined) profiles,
         which carry `rollerbandSpeed`; without it the layout falls back to a uniform gap.
 
-        `voxel_size` (default None = off) downsamples the dense clouds to one point per voxel — a
-        float in profile units (1 unit = 0.01 mm) — cutting the point count (and overdraw/memory) to
-        keep large sets responsive. Off ⇒ renders identically to before.
+        `voxel_size` (default None = off) downsamples the dense clouds to one point per cube of a 3-D
+        grid — cube edge = `voxel_size` in profile units (1 unit = 0.01 mm) — cutting the point count
+        (and overdraw/memory) to keep large sets responsive. It bins all axes INCLUDING height, so it
+        is not a uniform on-screen spacing: steep features (bead flanks) keep points stacked
+        ~`voxel_size` apart in height. Off ⇒ renders identically to before.
         """
         self.plotter = pv.Plotter()
         self._voxel_size = voxel_size
@@ -81,13 +83,25 @@ class plottingClass:
     def _maybe_voxel(self, cloud: "pv.DataSet") -> "pv.DataSet":
         """Downsample a point cloud to one point per `self._voxel_size` voxel (off when None).
 
-        Bins points on a grid and keeps the first in each occupied voxel. `extract_points` carries
-        every point-data array along, so a heat-map cloud's per-feature scalars stay aligned.
+        Bins points on a grid and keeps the first point in each occupied voxel. `extract_points`
+        carries every point-data array along, so a heat-map cloud's per-feature scalars stay aligned.
+
+        The 3-D voxel index is flattened to a single int64 key (a bijection via `ravel_multi_index`)
+        so uniqueness is a fast 1-D sort instead of a 3-column lexsort. Output is identical to the
+        row-wise `np.unique(axis=0)` — same first point per voxel — because the flatten is one-to-one
+        and `np.unique(return_index=True)` returns first occurrences. Falls back to the row-wise
+        unique in the pathological case where the flattened index space would overflow int64.
         """
-        if not self._voxel_size:
+        if not self._voxel_size or cloud.n_points == 0:
             return cloud
         key = np.floor(cloud.points / self._voxel_size).astype(np.int64)
-        _, idx = np.unique(key, axis=0, return_index=True)
+        key -= key.min(axis=0)  # shift to a non-negative grid so ravel_multi_index is valid
+        dims = key.max(axis=0) + 1
+        if int(dims[0]) * int(dims[1]) * int(dims[2]) < 2**63:  # flat index fits -> fast 1-D unique
+            flat = np.ravel_multi_index((key[:, 0], key[:, 1], key[:, 2]), dims)
+            _, idx = np.unique(flat, return_index=True)
+        else:  # pathological extent: exact row-wise fallback
+            _, idx = np.unique(key, axis=0, return_index=True)
         return cast("pv.DataSet", cloud.extract_points(np.sort(idx)))
 
     def show(self):

@@ -40,14 +40,14 @@ The system has two halves that meet at an HDF5 file:
 | `rawProfileUdpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileDataRaw`. | Active (standalone) |
 | `profilePointsClass.py` | Defines the analysis `profileData` dataclass **only** — the pure data model, no processing logic and no project imports. | Active |
 | `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, floor/bead categorisation, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`). Imports only `profilePointsClass`. | Active |
-| `profileLoading.py` | `load_profiles()` / `save_profiles()` — one generic pair that reads/writes `profileData` to HDF5, storing whichever fields are set (arrays → datasets, scalars → attributes). `load_profiles` also reads raw acquisition files (takes `x`/`z` + `arrival_time`, ignores the rest of the sensor metadata); `read_file_attrs()` returns file-level attributes (e.g. `raw_start`/`raw_end`). | Active |
+| `profileLoading.py` | `load_profiles()` / `save_profiles()` — read/write `profileData` to HDF5. `save_profiles` writes the processed cache as a **columnar table** (padded `[N,L]` points, `[N,2]` index pairs, `[N]` scalar columns, names) for fast bulk loading; `load_profiles` reads that, and reads raw acquisition files (`x`/`z` + `arrival_time`, rest ignored), but **rejects** an old per-group *processed* cache with a "reprocess" error. `read_file_attrs()` returns file-level attributes (e.g. `raw_start`/`raw_end`). | Active |
 | `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). Imports only `profilePointsClass`. | Active |
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, see `profile_advance_distances`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
 | `featureComparison.py` | `compare_features()` — matplotlib 2D overlay comparing several per-profile features over time, each robustly normalised to 0–1 (percentile-clipped so outliers don't flatten it), with a `CheckButtons` panel to toggle curves. Imports `profilePointsClass` + `FEATURE_DISPLAY`. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `datasetConfig.py` | The active experiment's file paths (`RAW_FILE`, `PLC_FILE`, derived `PROCESSED_FILE`) in one place, imported by both entry points so they can't drift. Switch datasets by moving the "ACTIVE" pair; others kept commented. | Active |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → join the PLC log by timestamp (trims to the overlap) → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
-| `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: load raw ("before") and the processed cache ("after") from files, and plot flexibly in 3D (PyVista, native window) — raw, processed, and an overlay. No processing on this path (uses the cache, not `process_profiles`). | Active |
+| `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: load the processed cache ("after") and reconstruct raw ("before") by inverting the stored leveling transform, then plot flexibly in 3D (PyVista, native window) — raw, processed, and an overlay — plus the 2D feature-comparison view. No processing on this path (uses the cache, not `process_profiles`). | Active |
 | `LidarProfileAnalysis_oldRegistration.py` | Previous entry point built around the registration path. | Legacy |
 
 ---
@@ -108,7 +108,7 @@ save_profiles(profiles, OUT, kind=..., raw_start=…, raw_end=…)  # profileLoa
 **Plot** (`dataAnalysis.py`, run freely):
 ```
 load_profiles(PROCESSED_FILE)            # profileLoading  → list[profileData]
-plottingClass(len(profiles))             # profile3Dplotting: precompute path + tilt
+plottingClass(profiles, voxel_size=…)    # profile3Dplotting: precompute path + tilt from the profiles
 plotter.plot(profiles, "profile", green) # batched: one actor for all profiles
 plotter.plot(profiles, "widthPoints", …) # mark width peaks
 plotter.show()                           # interactive PyVista window
@@ -222,30 +222,45 @@ physical plot spacing). The rest of the rich sensor metadata is written but not 
 ### Processed cache (`save_profiles` / `load_profiles`)
 
 A second, much smaller HDF5 holds the *processed* result so plotting can skip the raw
-load and the processing pipeline. Same `profile_NNNNNN` group layout:
+load and the processing pipeline. It is a **columnar "table"** — every per-profile field is one
+array keyed by profile index (profile *i* = row *i*), so the whole cache loads in a handful of bulk
+reads instead of ~N tiny per-group reads (measured **~142 s → ~5 s** on the 90.7k Exp1 cache):
 
-- Datasets: `x`, `z` (rotated + levelled coordinates), `peaks` (the two width-edge / flank-foot
-  indices), `beadWidthIdx` (the two outer bead-point indices).
-- Attributes: `name`, `width` (smoothed-slope flank-foot method, NaN when < 2 flanks), `beadWidth`
+- **`/points`** (per-point arrays, padded): `x`, `z` (rotated + levelled coordinates) and `floorMask`
+  (per-point floor/bead split) as `[N, L]` matrices (L = max point count), with `lengths` `[N]`
+  giving each profile's valid point count; plus `peaks` (the two width-edge / flank-foot indices) and
+  `beadWidthIdx` (the two outer bead-point indices) as `[N, 2]` int (`-1` = absent / None).
+- **`/scalars`** — every per-profile *scalar* field as a length-N `float64` dataset (NaN = unset):
+  `m`/`b` (floor fit), `width` (smoothed-slope flank-foot method, NaN when < 2 flanks), `beadWidth`
   (bead-edge method), `beadHeight` / `beadHeightSmooth` (robust bead heights, percentile vs
   median-smoothed; NaN when flat), `area` / `shoelaceArea` (bead cross-section, integration vs
-  shoelace; NaN when flat), `isFlat` (bool), `flatness` (line-fit RMS residual; None for the
-  default floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor
-  clock seconds, for inter-profile dt), and the 10 joined PLC channels (`mortarPumpFlow`,
-  `pressure*`, `printHead*`, `rollerband*`, `viscoPump*`).
-- File attributes: `kind = "processed"`, `source_file` (provenance), `raw_start`/`raw_end` (the raw
-  index span the cache covers, after the PLC-overlap trim), and `level_angle`/`level_offset` — the
-  uniform leveling transform. The plot workbench reconstructs the pre-leveling ("before") x/z by
-  inverting it (`unlevel_profiles`) instead of reloading the raw file; `raw_start`/`raw_end` remain
-  as provenance and the fallback for caches predating the stored transform.
+  shoelace; NaN when flat), `isFlat`, `flatness` (line-fit RMS residual; unset for the default
+  floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor clock
+  seconds, for inter-profile dt), and the 10 joined PLC channels (`mortarPumpFlow`, `pressure*`,
+  `printHead*`, `rollerband*`, `viscoPump*`).
+- **`/names`** — `[N]` strings.
+- **File attributes**: `layout = "columnar"`, `n_profiles`, `kind = "processed"`, `source_file`
+  (provenance), `raw_start`/`raw_end` (the raw index span the cache covers, after the PLC-overlap
+  trim), and `level_angle`/`level_offset` — the uniform leveling transform. The plot workbench
+  reconstructs the pre-leveling ("before") x/z by inverting it (`unlevel_profiles`) instead of
+  reloading the raw file; `raw_start`/`raw_end` remain as provenance and the fallback for caches
+  predating the stored transform.
 
-The default (floor-based) flat method caches `isFlat` directly and leaves `flatness` unset;
-`load_profiles` only re-derives `isFlat = flatness < FLATNESS_RMS_THRESHOLD` for the optional
-line-fit method (`flag_flat_profiles(use_line_fit=True)`), which stores an RMS `flatness` — so
-that cutoff can be retuned without reprocessing.
+`load_profiles` routes by file attribute: `layout="columnar"` → this table; a raw acquisition file
+(`profile_NNNNNN` groups, no `layout`) → takes `x`/`z` + `arrival_time`/`timestamp_*`; an **old
+per-group processed cache** (`kind="processed"` but no `layout`) is **rejected** with a "reprocess to
+the columnar layout" error (the legacy processed-cache reader was removed — reprocess old Exp2/Exp3
+caches before use). Padded storage suits the sensor's near-fixed profile width (negligible waste, gzip
+squashes the padding); if profile lengths ever varied widely, `/points` would switch to concatenation
++ an offsets index. The default (floor-based) flat method caches `isFlat` directly and leaves
+`flatness` unset; `load_profiles` only re-derives
+`isFlat = flatness < FLATNESS_RMS_THRESHOLD` for the optional line-fit method
+(`flag_flat_profiles(use_line_fit=True)`), which stores an RMS `flatness` — so that cutoff can be
+retuned without reprocessing.
 
 Example sizes: a 2000-profile slice is ~30 MB processed vs ~810 MB raw, and loads in
-~1 s vs ~19 s.
+~1 s vs ~19 s. Switching a cache to the columnar layout requires one reprocess
+(`python profileProcessing.py`); until then the old cache loads via the fallback path.
 
 ---
 
