@@ -23,8 +23,8 @@ pv.global_theme.notebook = False
 
 # 3D subsampling for the dense clouds: draw every PROFILE_STEP-th profile and every
 # POINT_STEP-th point (points drawn ~ total / (PROFILE_STEP * POINT_STEP)).
-PROFILE_STEP = 1
-POINT_STEP = 1
+PROFILE_STEP = 3
+POINT_STEP = 2
 
 # Voxel downsampling (see plottingClass): overlay a 3-D grid of cubes and keep ONE point per cube,
 # thinning dense areas to cut lag/overdraw/memory. Composes with PROFILE_STEP / POINT_STEP above.
@@ -98,3 +98,51 @@ compare_features(processed,
                            "viscoPump1_VMAflow", "mortarPumpFlow", "pressurePipeStart", "rollerbandSpeed"),
                  initial=("printHeadTorque", "width", "viscoPump1_VMAflow"),
                  time_unit="min", profile_step=5)
+
+
+# %% [TUNING - safe to delete] dial the floor/bead split without reprocessing
+# Re-runs the seed+grow categorization on the LOADED cache with the knobs below and re-plots floor
+# (brown) vs bead (green), to fix floor points near the bead being mislabelled as bead. Non-destructive:
+# it works on shallow copies, so the cache's floorMask (used by the cells above) is untouched, and it
+# does NOT change the processing pipeline. Once the split looks right, copy the values into the pipeline
+# (mapping at the bottom) and reprocess once. This whole cell -- imports included -- is self-contained;
+# delete it to remove every trace.
+import copy as _copy
+from profileProcessingAlgorithms import categorize_floor_points, grow_profile_points
+
+# Knobs. Primary levers for "floor points next to the bead get labelled bead": raise GROW_THRESHOLD
+# and/or lower FILL_GAP -- both monotonically trim the bleed. The cache was built with GROW_THRESHOLD=20,
+# FILL_GAP=5, GROW_USE_BASELINE=False, so the print below shows the before/after bead-point count.
+GROW_THRESHOLD    = 150     # z (~0.01 mm) to grow the bead down to (cache 20; HIGHER = less edge bleed)
+FILL_GAP          = 3      # bridge interior floor gaps up to this many points (cache 5; LOWER = less bleed)
+SEED_THRESHOLD    = 300    # z to seed a confident bead point (HIGHER = stricter/fewer seeds)
+MIN_SEED_LEN      = 3      # a bead core must span >= this many points (rejects lone spikes)
+SEED_USE_BASELINE = True   # seed above each profile's own floor fit (as the pipeline already does)
+GROW_USE_BASELINE = False  # grow height reference: False = uniform median z (as the cache); True = each
+                           #   profile's OWN floor fit (consistent with the seed). Try True if WHOLE floor
+                           #   regions on tilted/offset profiles are mislabelled -- but note it re-balances
+                           #   both ways (can ADD bead where the cache under-grew), so watch the plot.
+TUNE_SLICE        = slice(None)#0, 8000)  # focus a range so re-plotting stays snappy (slice(None) = all)
+
+_tuned = [_copy.copy(p) for p in processed[TUNE_SLICE]]  # shallow: own floorMask, shares x/z/m/b
+categorize_floor_points(_tuned, threshold=SEED_THRESHOLD, use_profile_baseline=SEED_USE_BASELINE)
+grow_profile_points(_tuned, low_threshold=GROW_THRESHOLD, min_seed_length=MIN_SEED_LEN,
+                    max_gap=FILL_GAP, use_profile_baseline=GROW_USE_BASELINE)
+_bead = sum(int((~p.floorMask).sum()) for p in _tuned if p.floorMask is not None)
+_orig = sum(int((~p.floorMask).sum()) for p in processed[TUNE_SLICE] if p.floorMask is not None)
+print(f"bead points over {len(_tuned)} profiles:  tuned {_bead:,}  vs  cache {_orig:,}")
+
+_pl = profile3Dplotting.plottingClass(_tuned, voxel_size=VOXEL_SIZE)
+_pl.plot(_tuned, "profile", "saddlebrown", category="floor", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+_pl.plot(_tuned, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+_pl.show()
+
+# To apply the settled values, edit the pipeline then run `python profileProcessing.py`:
+#   GROW_USE_BASELINE -> GROW_USE_PROFILE_BASELINE   (profileProcessing.py)
+#   SEED_USE_BASELINE -> SEED_USE_PROFILE_BASELINE   (profileProcessing.py)
+#   SEED_THRESHOLD    -> FLOOR_POINT_THRESHOLD       (profileProcessingAlgorithms.py)
+#   GROW_THRESHOLD    -> PROFILE_GROW_THRESHOLD      (profileProcessingAlgorithms.py)
+#   MIN_SEED_LEN      -> MIN_SEED_LENGTH             (profileProcessingAlgorithms.py)
+#   FILL_GAP          -> PROFILE_FILL_GAP            (profileProcessingAlgorithms.py)
+
+# %%
