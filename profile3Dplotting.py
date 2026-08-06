@@ -4,56 +4,39 @@ import numpy as np
 import pyvista as pv
 from plcData import PLC_COLUMNS
 from profilePointsClass import profileData
+from profileProcessingAlgorithms import profile_advance_distances
 
 # Heat-map feature display: feature -> (group, unit factor, unit label). 1 profile unit = 0.01 mm,
 # so lengths scale to mm and areas to mm^2. Features sharing a group share one colour range (clim),
 # so paired measures are directly comparable; grouping also sets the button order.
 FEATURE_DISPLAY = {
     "width":            ("width",  0.01, "mm"),
-    "beadWidth":        ("width",  0.01, "mm"),
-    "beadHeight":       ("height", 0.01, "mm"),
-    "beadHeightSmooth": ("height", 0.01, "mm"),
+    "filamentWidth":        ("width",  0.01, "mm"),
+    "filamentHeight":       ("height", 0.01, "mm"),
+    "filamentHeightSmooth": ("height", 0.01, "mm"),
     "area":             ("area",   1e-4, "mm^2"),
     "shoelaceArea":     ("area",   1e-4, "mm^2"),
+    # Volumes: area-unit * distance-unit -> cm^3 (1e-4 mm^2 * 0.01 mm = 1e-6 mm^3 = 1e-9 cm^3). Each
+    # its own colour group: a segment total is ~10^2-10^3x a single slice, so they must not share a clim.
+    "segmentVolume":    ("segmentVolume", 1e-9, "cm^3"),
+    "sliceVolume":      ("sliceVolume",   1e-9, "cm^3"),
+    # Run lengths along the print path: profile units -> mm (0.01). Own colour groups (a macro cm-scale
+    # length, unlike the mm-scale bead widths). defectLength lives on pure-floor profiles, so it only
+    # shows in a floor-category heat-map (`plot_feature_heatmap(..., category="floor")`).
+    "segmentLength":    ("segmentLength", 0.01, "mm"),
+    "defectLength":     ("defectLength",  0.01, "mm"),
     # PLC machine-log channels (joined by timestamp): each its own colour group, since their
     # magnitudes differ widely. Shown in the PLC's native engineering units (factor 1.0; the
     # unit label is left blank as the physical units aren't recorded in the CSV).
     **{name: (name, 1.0, "") for name in PLC_COLUMNS},
 }
 
-# Along-track spacing of profiles in the 3D layout. 1 profile unit = 0.01 mm, so 1 m = 1e5 units.
-# Each profile advances rollerbandSpeed (m/s) * dt (s) along the print path (see
-# profile_advance_distances); when speed/time data is missing, profiles fall back to a uniform gap.
-METERS_TO_PROFILE_UNITS = 1e5
-UNIFORM_PROFILE_DISTANCE = 2000.0  # fallback along-track gap when speed/time is unavailable
-
-
-def profile_advance_distances(profiles: list[profileData]) -> np.ndarray:
-    """Per-profile along-path advance (profile units) from rollerbandSpeed (m/s) x inter-profile dt.
-
-    dt is taken from the sensor clock (`sensorTime` = timestamp_sec + timestamp_usec, monotonic and
-    low-jitter), falling back to `arrivalTime`; the first profile gets 0 (path origin). Missing speed
-    or a non-monotonic step yields 0 advance for that profile. If neither a time base nor
-    `rollerbandSpeed` is available at all (e.g. raw profiles without the PLC join), returns a uniform
-    `UNIFORM_PROFILE_DISTANCE` spacing (the pre-physical behaviour).
-    """
-    n = len(profiles)
-    if n == 0:
-        return np.empty(0)
-    t = np.array([p.sensorTime if p.sensorTime is not None else np.nan for p in profiles], float)
-    if not np.any(np.isfinite(t)):  # no sensor clock (e.g. old cache) -> capture-PC clock
-        t = np.array([p.arrivalTime if p.arrivalTime is not None else np.nan for p in profiles], float)
-    speed = np.array([p.rollerbandSpeed if p.rollerbandSpeed is not None else np.nan for p in profiles], float)
-    if not np.any(np.isfinite(t)) or not np.any(np.isfinite(speed)):
-        return np.full(n, UNIFORM_PROFILE_DISTANCE)
-
-    dist = np.zeros(n)
-    dt = np.diff(t)                             # seconds between consecutive profiles
-    speed_mid = 0.5 * (speed[:-1] + speed[1:])  # mean belt speed over each interval
-    dist[1:] = speed_mid * dt * METERS_TO_PROFILE_UNITS
-    dist[~np.isfinite(dist)] = 0.0             # missing speed/time on a profile -> no advance
-    dist[dist < 0.0] = 0.0                     # guard non-monotonic time
-    return dist
+# Heat-map colour-scale modes, cycled live by the scale button (see plottingClass._add_scale_button).
+# "linear" (default) keeps the full min-max range; the others tame an outlier that would otherwise
+# squash every smaller value into one end of the colormap.
+_SCALE_MODES = ("linear", "log", "clip", "rank")
+CLIP_PERCENTILES = (2.0, 98.0)  # "clip" mode maps this percentile range to the colormap (outliers saturate)
+_RANK_SUFFIX = "__rank"          # per-feature companion array holding the [0, 1] dense rank (rank mode)
 
 
 class plottingClass:
@@ -66,7 +49,7 @@ class plottingClass:
         `voxel_size` (default None = off) downsamples the dense clouds to one point per cube of a 3-D
         grid — cube edge = `voxel_size` in profile units (1 unit = 0.01 mm) — cutting the point count
         (and overdraw/memory) to keep large sets responsive. It bins all axes INCLUDING height, so it
-        is not a uniform on-screen spacing: steep features (bead flanks) keep points stacked
+        is not a uniform on-screen spacing: steep features (filament flanks) keep points stacked
         ~`voxel_size` apart in height. Off ⇒ renders identically to before.
         """
         self.plotter = pv.Plotter()
@@ -112,8 +95,8 @@ class plottingClass:
              profile_step: int = 1, point_step: int = 1, flat_colour: str | None = None,
              category: str | None = None, spheres: bool = False) -> None:
         """Add one subject to the 3D scene: "profile", "baseline", "zeroBaseline",
-        "widthPoints" (slope-peak method, uses `peaks`), or "beadWidthPoints" (outer-bead-point
-        method, uses `beadWidthIdx`).
+        "widthPoints" (slope-peak method, uses `peaks`), or "filamentWidthPoints" (outer-filament-point
+        method, uses `filamentWidthIdx`).
 
         profile_step / point_step subsample the dense "profile" cloud so interaction
         stays responsive on very large datasets: plot every profile_step-th profile and
@@ -126,7 +109,7 @@ class plottingClass:
 
         category (profiles only): "floor" or "profile" draws only points of that category
         (uses `floorMask`); None draws all points. Call twice with different category +
-        colour to show floor vs bead in two colours.
+        colour to show floor vs filament in two colours.
         """
         match plotSubject:
             case "profile":
@@ -146,9 +129,9 @@ class plottingClass:
             case "widthPoints":
                 # slope-peak width method: mark the two peak points (from `peaks`)
                 self.add_3d_points_to_plot(width_point_arrays(profiles, "peaks"), colour, size, spheres=spheres)
-            case "beadWidthPoints":
-                # bead-edge width method: mark the two outer bead points (from `beadWidthIdx`)
-                self.add_3d_points_to_plot(width_point_arrays(profiles, "beadWidthIdx"), colour, size, spheres=spheres)
+            case "filamentWidthPoints":
+                # filament-edge width method: mark the two outer filament points (from `filamentWidthIdx`)
+                self.add_3d_points_to_plot(width_point_arrays(profiles, "filamentWidthIdx"), colour, size, spheres=spheres)
 
     def add_3d_points_to_plot(self,points, colour = 'green', point_size=5, spheres=False):
         # Collect every profile's transformed points and add them as a single actor, placed along the
@@ -183,38 +166,44 @@ class plottingClass:
             self.plotter.add_mesh(lines, color = colour, line_width=5)
 
     def plot_feature_heatmap(self, profiles: list[profileData],
-                             features: tuple[str, ...] = ("width", "beadWidth", "beadHeight", "beadHeightSmooth", "area", "shoelaceArea"),
-                             initial: str = "beadWidth", cmap: str = "viridis",
-                             point_size: int = 6, profile_step: int = 1, point_step: int = 1) -> None:
-        """Colour the bead cloud by a per-profile scalar feature, with a clickable button panel
+                             features: tuple[str, ...] = ("width", "filamentWidth", "filamentHeight", "filamentHeightSmooth", "area", "shoelaceArea"),
+                             initial: str = "filamentWidth", cmap: str = "viridis",
+                             point_size: int = 6, profile_step: int = 1, point_step: int = 1,
+                             category: str = "profile") -> None:
+        """Colour a per-point cloud by a per-profile scalar feature, with a clickable button panel
         to switch the active feature live.
 
         Each feature in `features` is attached to the cloud as its own point-data array (each
-        profile's scalar broadcast to its bead points, converted to physical units per
-        FEATURE_DISPLAY), so switching only repoints the mapper and rescales the colour bar — no
-        recompute. Features in the same group (width / height / area) share one colour range so the
-        paired measures are directly comparable, and the colour bar is labelled in mm / mm^2. Bead
-        points only (`~floorMask`); flat profiles contribute none. NaN feature values (e.g. width
-        with < 2 flanks) render in the NaN colour. Interactive-window only (buttons need a live VTK
-        interactor).
+        profile's scalar broadcast to its points, converted to physical units per FEATURE_DISPLAY),
+        so switching only repoints the mapper and rescales the colour bar — no recompute. Features in
+        the same group (width / height / area) share one colour range so the paired measures are
+        directly comparable, and the colour bar is labelled in mm / mm^2. A second radio group at the
+        bottom-right sets the colour-scale mode of the active feature live — linear (full min-max,
+        default), log, clip (2-98 pct, so an outlier doesn't squash the rest), rank (dense rank 0-1) —
+        see `_apply_scale`. `category` picks which points to colour: "profile" (filament points, the
+        default — flat profiles drop out) or "floor" (substrate points — needed for `defectLength`,
+        which lives on pure-floor profiles). NaN feature values render in the NaN colour. Interactive-
+        window only (buttons need a live VTK interactor).
         """
         self._build_feature_cloud(profiles, features, initial, cmap, point_size,
-                                  profile_step, point_step)
+                                  profile_step, point_step, category)
         self._add_feature_selector()
+        self._add_scale_selector()
 
     def _build_feature_cloud(self, profiles: list[profileData], features: tuple[str, ...],
                              initial: str, cmap: str, point_size: int,
-                             profile_step: int, point_step: int) -> None:
-        """Build and add the bead cloud carrying one scalar array per feature, and store the
-        state the selector callback mutates. Separated from the widget wiring so it can be
+                             profile_step: int, point_step: int, category: str = "profile") -> None:
+        """Build and add the point cloud carrying one scalar array per feature, and store the
+        state the selector callback mutates. `category` ("profile" filament points / "floor" substrate
+        points) selects which points to draw. Separated from the widget wiring so it can be
         exercised without a live interactor (headless tests)."""
         if initial not in features:
             raise ValueError(f"initial feature {initial!r} not in {features}")
-        per_profile = get_profile_points_for_plot(profiles, profile_step, point_step, category="profile")
+        per_profile = get_profile_points_for_plot(profiles, profile_step, point_step, category=category)
         transformed = []
         columns: dict[str, list[np.ndarray]] = {f: [] for f in features}
         for i, prof_pts in enumerate(per_profile):
-            if prof_pts.shape[0] == 0:  # skipped, empty, or flat (no bead points)
+            if prof_pts.shape[0] == 0:  # skipped, empty, or flat (no filament points)
                 continue
             transformed.append(self.pathPoints[i] + prof_pts @ self.rotation_matrices[i].T)
             for f in features:
@@ -230,18 +219,31 @@ class plottingClass:
         # Downsample before clim/store so the reduced cloud is what's coloured and live-switched;
         # extract_points carries the per-feature scalar arrays along.
         cloud = self._maybe_voxel(cloud)
+        # Rank companion array per feature (for the "rank" scale mode), on the displayed values.
+        for f in features:
+            cloud[f + _RANK_SUFFIX] = _rank01(np.asarray(cloud[f]))
         cloud.set_active_scalars(initial)
 
         # features in the same group share one colour range, computed over the whole group's values
         groups: dict[str, list[str]] = {}
         for f in features:
             groups.setdefault(FEATURE_DISPLAY[f][0], []).append(f)
-        group_clim = {g: _finite_clim(np.concatenate([cloud[f] for f in feats]))
-                      for g, feats in groups.items()}
+        group_vals = {g: np.concatenate([cloud[f] for f in feats]) for g, feats in groups.items()}
+        group_linear = {g: _finite_clim(v) for g, v in group_vals.items()}
+        group_log = {g: _positive_clim(v) for g, v in group_vals.items()}
+        group_clip = {g: _percentile_clim(v, CLIP_PERCENTILES) for g, v in group_vals.items()}
 
         self._feature_names = list(features)
         self._feature_initial = initial
-        self._feature_clim = {f: group_clim[FEATURE_DISPLAY[f][0]] for f in features}
+        self._active_feature = initial
+        self._scale_mode = "linear"
+        self._feature_clim = {f: group_linear[FEATURE_DISPLAY[f][0]] for f in features}
+        # per feature, the clim for each scale mode (rank is always [0, 1]); None = mode unavailable
+        self._feature_scale_clim = {
+            f: {"linear": group_linear[g], "log": group_log[g],
+                "clip": group_clip[g], "rank": [0.0, 1.0]}
+            for f, g in ((f, FEATURE_DISPLAY[f][0]) for f in features)
+        }
         self._feature_unit = {f: FEATURE_DISPLAY[f][2] for f in features}
         self._feature_cloud = cloud
         actor = self.plotter.add_points(
@@ -251,27 +253,52 @@ class plottingClass:
                              "position_y": 0.10, "width": 0.34, "height": 0.05},
         )
         self._feature_mapper = actor.mapper
-        self._set_feature_labels(initial)
+        self._set_feature_labels(initial, "linear")
 
-    def _set_feature_labels(self, feature: str) -> None:
-        """Feature name at the top edge, and its unit centred just above the horizontal colour bar
-        (a separate text actor so the unit is not cramped against the bar and its numbers)."""
+    def _scale_label(self, feature: str, mode: str) -> str:
+        """Text above the colour bar: the feature's unit annotated with the active scale mode."""
+        unit = self._feature_unit[feature]
+        if mode == "rank":
+            return "rank 0-1"
+        if mode == "log":
+            return f"{unit} (log)".strip()
+        if mode == "clip":
+            lo, hi = CLIP_PERCENTILES
+            return f"{unit} (clip {lo:g}-{hi:g}%)".strip()
+        return unit  # linear
+
+    def _set_feature_labels(self, feature: str, mode: str) -> None:
+        """Feature name at the top edge, and its unit + active scale mode centred just above the
+        horizontal colour bar (a separate text actor so it is not cramped against the bar's numbers)."""
         self.plotter.add_text(feature, name="feature_title", position="upper_edge", font_size=16)
-        # anchor at the bar's centre (x = 0.50) with centred justification so mm / mm^2 stay centred
-        unit_actor = self.plotter.add_text(self._feature_unit[feature], name="feature_unit",
+        # anchor at the bar's centre (x = 0.50) with centred justification so the label stays centred
+        unit_actor = self.plotter.add_text(self._scale_label(feature, mode), name="feature_unit",
                                            position=(0.50, 0.17), viewport=True, font_size=16)
         unit_actor.GetTextProperty().SetJustificationToCentered()
 
-    def _set_feature(self, feature: str) -> None:
-        """Switch the active feature: repoint the mapper, rescale to the group's shared range
-        (physical units), and relabel the feature name + unit."""
-        self._feature_cloud.set_active_scalars(feature)
-        self._feature_mapper.array_name = feature
-        clim = self._feature_clim[feature]
+    def _apply_scale(self, feature: str, mode: str) -> None:
+        """Colour `feature` with scale `mode` live: pick the value/rank array, set the log flag and
+        colour range, relabel and re-render. A mode with no valid range (e.g. log on a feature with no
+        positive values) renders as linear, but the requested `mode` is kept so cycling still advances."""
+        self._active_feature = feature
+        self._scale_mode = mode
+        clim = self._feature_scale_clim[feature][mode]
+        render_mode = mode
+        if clim is None:  # mode unavailable for this feature -> fall back to linear for rendering
+            render_mode = "linear"
+            clim = self._feature_scale_clim[feature]["linear"]
+        array = feature + _RANK_SUFFIX if render_mode == "rank" else feature
+        self._feature_cloud.set_active_scalars(array)
+        self._feature_mapper.array_name = array
+        self._feature_mapper.lookup_table.log_scale = (render_mode == "log")
         if clim is not None:
             self._feature_mapper.scalar_range = clim
-        self._set_feature_labels(feature)
+        self._set_feature_labels(feature, render_mode)
         self.plotter.render()
+
+    def _set_feature(self, feature: str) -> None:
+        """Switch the active feature, re-applying the currently-selected colour-scale mode."""
+        self._apply_scale(feature, self._scale_mode)
 
     def _add_feature_selector(self, size: int = 26, gap: int = 8) -> None:
         """Add one toggle button per feature (a left-edge panel); clicking one makes it the active
@@ -294,6 +321,64 @@ class plottingClass:
             for j, widget in enumerate(self._feature_buttons):
                 widget.GetRepresentation().SetState(1 if j == idx else 0)
             self._set_feature(feature)
+        return callback
+
+    def _add_scale_selector(self, size: int = 26, gap: int = 8) -> None:
+        """Add a radio group of colour-scale buttons pinned to the bottom-RIGHT corner (linear / log /
+        clip / rank), single-select like the feature selector; clicking one re-scales the active feature
+        live.
+
+        The group sits bottom-right (pixels from the lower-left window corner) so it clears the tall
+        left-edge feature panel. VTK button widgets take fixed pixel positions with no right-edge anchor,
+        so a window-resize (`ConfigureEvent`) observer re-places the buttons + labels to track the right
+        edge (`_reposition_scale_selector`). The vertical y's are bottom-anchored and never change.
+        """
+        n = len(_SCALE_MODES)
+        self._scale_size = size
+        self._scale_button_ys = [12 + (n - 1 - j) * (size + gap) for j in range(n)]  # linear top .. rank bottom
+        self._scale_header_y = 12 + n * (size + gap) + 4
+        x = self._scale_selector_x()
+        self._scale_header_actor = self.plotter.add_text("scale:", position=(x, self._scale_header_y),
+                                                         font_size=11)
+        self._scale_buttons = []
+        self._scale_label_actors = []
+        for j, mode in enumerate(_SCALE_MODES):
+            y = self._scale_button_ys[j]
+            widget = self.plotter.add_checkbox_button_widget(
+                self._make_scale_callback(mode, j),
+                value=(mode == self._scale_mode),
+                position=(x, y), size=size, color_on="blue", color_off="grey",
+            )
+            self._scale_buttons.append(widget)
+            self._scale_label_actors.append(
+                self.plotter.add_text(mode, position=(x + size + 8, y + 4), font_size=10))
+        if self.plotter.iren is not None:  # keep it pinned to the corner on resize (needs an interactor)
+            self.plotter.iren.add_observer("ConfigureEvent", self._on_window_resize)
+
+    def _scale_selector_x(self) -> int:
+        """Left x (pixels) of the bottom-right scale group, tracking the current window width."""
+        return int(self.plotter.window_size[0]) - 130  # column width leaves room for labels to its right
+
+    def _reposition_scale_selector(self) -> None:
+        """Re-place the scale buttons + labels at the current window's right edge (y is unchanged)."""
+        x, size = self._scale_selector_x(), self._scale_size
+        self._scale_header_actor.SetPosition(x, self._scale_header_y)
+        for widget, actor, y in zip(self._scale_buttons, self._scale_label_actors, self._scale_button_ys):
+            widget.GetRepresentation().PlaceWidget([x, x + size, y, y + size, 0.0, 0.0])
+            actor.SetPosition(x + size + 8, y + 4)
+
+    def _on_window_resize(self, *args) -> None:
+        """ConfigureEvent handler: keep the scale group pinned to the bottom-right corner."""
+        self._reposition_scale_selector()
+        self.plotter.render()
+
+    def _make_scale_callback(self, mode: str, idx: int):
+        """Build the click callback for one scale button: enforce single-selection (radio) and
+        re-scale the active feature to `mode`. Setting the other buttons' state does not re-fire."""
+        def callback(state: bool) -> None:
+            for j, widget in enumerate(self._scale_buttons):
+                widget.GetRepresentation().SetState(1 if j == idx else 0)
+            self._apply_scale(self._active_feature, mode)
         return callback
 
 
@@ -327,7 +412,7 @@ def get_profile_points_for_plot(profiles: list[profileData], profile_step: int =
     return points
 
 def width_point_arrays(profiles: list[profileData], idx_attr: str):
-    """One (2, 3) point array per profile from a 2-index attribute ("peaks" or "beadWidthIdx").
+    """One (2, 3) point array per profile from a 2-index attribute ("peaks" or "filamentWidthIdx").
 
     One entry per profile keeps alignment with the print path; a profile without exactly two
     indices contributes an empty (0, 3) array (skipped on plot).
@@ -352,6 +437,50 @@ def _finite_clim(values: np.ndarray) -> "list[float] | None":
         return None
     lo, hi = float(finite.min()), float(finite.max())
     return [lo, hi + 1.0] if lo == hi else [lo, hi]
+
+def _positive_clim(values: np.ndarray) -> "list[float] | None":
+    """[smallest positive, max] over the finite entries — the range for a log10 colour scale.
+
+    Returns None if no finite value is > 0 (the caller then falls back to a linear scale). A
+    degenerate (min == max) range is widened multiplicatively so the log colormap is not singular.
+    """
+    finite = values[np.isfinite(values)]
+    positive = finite[finite > 0.0]
+    if positive.size == 0:
+        return None
+    lo, hi = float(positive.min()), float(finite.max())
+    return [lo, lo * 10.0] if hi <= lo else [lo, hi]
+
+def _percentile_clim(values: np.ndarray, pct: tuple[float, float]) -> "list[float] | None":
+    """[low, high] percentile range (outliers clip to the ends), over the DISTINCT finite values.
+
+    Same robust idea as `featureComparison._scale_range`, but percentiles are taken over the distinct
+    values, so each per-profile value (≈ each filament segment) counts once regardless of how many
+    points hold it — otherwise one big but long segment (many points) could not be clipped out. None
+    if nothing is finite; a degenerate range is widened by 1 (as in `_finite_clim`).
+    """
+    finite = np.unique(values[np.isfinite(values)])  # unique -> per-segment weighting, size-unbiased
+    if finite.size == 0:
+        return None
+    lo, hi = (float(v) for v in np.percentile(finite, pct))
+    return [lo, hi + 1.0] if lo == hi else [lo, hi]
+
+def _rank01(values: np.ndarray) -> np.ndarray:
+    """Dense rank of each finite value mapped to [0, 1]; NaN entries stay NaN.
+
+    Tie-safe: identical values get an identical rank (so a profile's broadcast points keep one
+    colour), and distinct values are spread evenly regardless of how many points hold them — the
+    point of the rank scale. A single distinct value maps to 0.0.
+    """
+    out = np.full(values.shape, np.nan)
+    finite = np.isfinite(values)
+    v = values[finite]
+    if v.size == 0:
+        return out
+    _, inverse = np.unique(v, return_inverse=True)  # inverse in [0, n_unique - 1], ties share an index
+    n_unique = int(inverse.max()) + 1
+    out[finite] = inverse / max(n_unique - 1, 1)
+    return out
 
 def line_points_from_floorSides(profiles: list[profileData]):
     """Endpoints of each profile's floor baseline from its stored fit (m, b).

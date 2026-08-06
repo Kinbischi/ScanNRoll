@@ -6,9 +6,10 @@ from a **Baumer OX200** LIDAR sensor, as part of a PhD research project on
 
 A *profile* is a single cross-sectional scan: a row of `(x, z)` points where `x`
 is the position across the sensor's field of view and `z` is the measured height.
-Many profiles taken along a print path reconstruct the 3D shape of a printed bead.
+Many profiles taken along a print path reconstruct the 3D shape of a printed filament.
 Processing splits each profile into the flat **floor** (the substrate) and the raised
-**bead** (the printed material), and measures the bead's width. (Units: 1 unit ≈ 0.01 mm.)
+**filament** (the printed material), and measures the filament's width, cross-sectional area,
+per-segment volume, and segment/defect lengths. (Units: 1 unit ≈ 0.01 mm.)
 
 ---
 
@@ -17,13 +18,15 @@ Processing splits each profile into the flat **floor** (the substrate) and the r
 1. **Capture** — listen for UDP packets from the sensor and write each profile
    (plus its measurement metadata) into an HDF5 file.
 2. **Process** — level every profile against the substrate (one median rotation + shift
-   for the whole set), categorise each point as **floor** or **bead**, flag substrate-only
-   ("flat") profiles, measure the bead **width** two ways (from the smoothed-slope peaks
-   and from the outer bead points), and its cross-sectional **area** two ways (integration and
-   the shoelace formula). Cached to a small processed HDF5.
+   for the whole set), categorise each point as **floor** or **filament**, flag substrate-only
+   ("flat") profiles, measure the filament **width** two ways (from the smoothed-slope peaks
+   and from the outer filament points), its cross-sectional **area** two ways (integration and
+   the shoelace formula), and — per filament segment along the print path — its **volume** and
+   **length** (plus the **defect length** of each pure-floor gap). Cached to a small processed HDF5.
 3. **Visualise** — lay the profiles out along a computed print path and render them as an
-   interactive 3D point cloud (floor vs bead in colour, flat profiles highlighted, width
-   markers, baselines).
+   interactive 3D point cloud (floor vs filament in colour, flat profiles highlighted, width
+   markers, baselines), plus a feature heat-map coloured by any per-profile measure with a live
+   feature selector and colour-scale modes (linear / log / clip / rank).
 
 A separate (currently dormant) *registration* path aligns and joins overlapping
 profiles; see [ARCHITECTURE.md](ARCHITECTURE.md).

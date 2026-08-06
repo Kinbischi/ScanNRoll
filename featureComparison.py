@@ -4,7 +4,7 @@ A matplotlib line overlay: each selected `profileData` feature (geometry measure
 channel) is drawn against time, robustly normalised to 0-1 so features on very different scales
 (torque ~1.5, width ~4000 units, flow ~0-1) share one axis. Left-panel checkboxes toggle each
 curve's visibility ("show") and whether it is smoothed ("smooth"); a slider sets the smoothing
-window. Complements the 3D bead heat-map (`profile3Dplotting.plot_feature_heatmap`), which colours
+window. Complements the 3D filament heat-map (`profile3Dplotting.plot_feature_heatmap`), which colours
 one feature at a time in space; here many features are compared as time series.
 """
 import logging

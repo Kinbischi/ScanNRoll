@@ -14,10 +14,12 @@ from profileProcessingAlgorithms import (
     categorize_floor_points,
     flag_flat_profiles,
     grow_profile_points,
-    measure_bead_area,
-    measure_bead_height,
+    measure_filament_area,
+    measure_filament_height,
+    measure_filament_volume,
+    measure_run_lengths,
     rotate_and_shift_uniform,
-    width_from_bead_edges,
+    width_from_filament_edges,
     width_from_smoothed_slope,
 )
 
@@ -32,7 +34,7 @@ logger = logging.getLogger(__name__)
 START_PROFILE = 0
 END_PROFILE = None
 
-# Floor/bead categorisation height basis, chosen separately for the seed and grow steps.
+# Floor/filament categorisation height basis, chosen separately for the seed and grow steps.
 # True: use each profile's OWN floor fit (floor sits at 0, robust to per-profile tilt/offset).
 # False: use the uniform median-levelled height. The DATA stays median-levelled either way
 # (relative heights kept for visualisation); only the categorisation height basis changes.
@@ -49,16 +51,16 @@ def process_profiles(profiles: list[profileData]) -> tuple[list[profileData], fl
     """
     # uniform: one median rotation + shift for all profiles (keeps relative heights)
     level_angle, level_offset = rotate_and_shift_uniform(profiles)
-    # seed floor vs bead points, then grow the bead into its connected lower flanks
+    # seed floor vs filament points, then grow the filament into its connected lower flanks
     categorize_floor_points(profiles, use_profile_baseline=SEED_USE_PROFILE_BASELINE)
     grow_profile_points(profiles, use_profile_baseline=GROW_USE_PROFILE_BASELINE)
-    flag_flat_profiles(profiles)  # flat = no bead points (uses floorMask; set after grow)
-    # width, two ways: smoothed-slope flank feet and the outer bead points
+    flag_flat_profiles(profiles)  # flat = no filament points (uses floorMask; set after grow)
+    # width, two ways: smoothed-slope flank feet and the outer filament points
     width_from_smoothed_slope(profiles)  # -> peaks, width (smooths internally)
-    width_from_bead_edges(profiles)      # -> beadWidthIdx, beadWidth
-    measure_bead_height(profiles)        # -> beadHeight, beadHeightSmooth (robust bead heights)
-    # cross-sectional bead area above the median floor, two ways (integration + shoelace)
-    measure_bead_area(profiles)          # -> area, shoelaceArea
+    width_from_filament_edges(profiles)      # -> filamentWidthIdx, filamentWidth
+    measure_filament_height(profiles)        # -> filamentHeight, filamentHeightSmooth (robust filament heights)
+    # cross-sectional filament area above the median floor, two ways (integration + shoelace)
+    measure_filament_area(profiles)          # -> area, shoelaceArea
     # Optional steps in profileProcessingAlgorithms (import + call to enable): rotate_pointcloud
     # + translate_floor_to_zero (per-profile levelling).
     return profiles, level_angle, level_offset
@@ -86,6 +88,11 @@ def main() -> None:
     raw_start, raw_end = start + covered[0], start + covered[-1] + 1
     profiles = join_plc_to_profiles(profiles, plc)
     assert raw_end - raw_start == len(profiles), "PLC coverage is not a contiguous profile block"
+
+    # Filament-segment volume runs here (not in process_profiles) because it needs the physical
+    # inter-profile distances, which depend on rollerbandSpeed — only populated by the PLC join above.
+    measure_filament_volume(profiles)  # -> segmentVolume, sliceVolume
+    measure_run_lengths(profiles)      # -> segmentLength (filament runs), defectLength (pure-floor runs)
 
     save_profiles(profiles, PROCESSED_FILE, kind="processed", source_file=RAW_FILE,
                   raw_start=raw_start, raw_end=raw_end,

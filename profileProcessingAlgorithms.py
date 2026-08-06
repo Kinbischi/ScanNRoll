@@ -1,7 +1,7 @@
 """Per-profile processing algorithms for LIDAR profiles.
 
 Pure functions that operate in place on lists of `profileData` (defined in
-profilePointsClass): rotate/level to the floor, categorise floor/bead points, smooth,
+profilePointsClass): rotate/level to the floor, categorise floor/filament points, smooth,
 measure width, flag flatness, plus the shared `moving_average` and
 `get_baseline_from_profileBorder` helpers. The `process_profiles` pipeline in
 profileProcessing.py composes these in order.
@@ -11,7 +11,7 @@ Units: x and z are in profile units where 1 unit = 0.01 mm (so 20 = 0.2 mm, 100 
 import numpy as np
 import scipy as sp
 import scipy.signal    # ensure sp.signal.find_peaks is available without relying on side-effect imports
-import scipy.integrate # ensure sp.integrate.simpson is available (bead area)
+import scipy.integrate # ensure sp.integrate.simpson is available (filament area)
 import scipy.ndimage   # ensure sp.ndimage.median_filter is available (smoothed height)
 
 from profilePointsClass import profileData
@@ -20,20 +20,20 @@ from profilePointsClass import profileData
 MIN_PROFILE_POINTS = 10
 
 # RMS residual (profile units, ~0.01 mm) of a straight-line fit to the whole profile: below
-# this the profile is "flat" (substrate only), above it a bead is present. Set in the valley
-# of the bimodal flat/beaded residual distribution.
+# this the profile is "flat" (substrate only), above it a filament is present. Set in the valley
+# of the bimodal flat-vs-filament residual distribution.
 FLATNESS_RMS_THRESHOLD = 350
 
 def flag_flat_profiles(profiles: list[profileData], use_line_fit: bool = False,
-                       threshold: float = FLATNESS_RMS_THRESHOLD, max_bead_points: int = 0) -> None:
+                       threshold: float = FLATNESS_RMS_THRESHOLD, max_filament_points: int = 0) -> None:
     """Flag each profile as flat (substrate only) or not, setting `isFlat`.
 
-    Default (floor-based): flat when categorisation found essentially no bead points — at most
-    `max_bead_points` of them. Uses `floorMask`, so run categorize_floor_points +
+    Default (floor-based): flat when categorisation found essentially no filament points — at most
+    `max_filament_points` of them. Uses `floorMask`, so run categorize_floor_points +
     grow_profile_points first; `flatness` is left None (it is a line-fit-only metric). With
     use_line_fit=True the old method is used instead: a straight line is fit to all points and
     `flatness` is set to the RMS residual (small for a substrate-only profile, large for a
-    bead), `isFlat` = residual < threshold. Too-short profiles are treated as flat.
+    filament), `isFlat` = residual < threshold. Too-short profiles are treated as flat.
     """
     for p in profiles:
         if p.x.shape[0] < MIN_PROFILE_POINTS:
@@ -46,21 +46,21 @@ def flag_flat_profiles(profiles: list[profileData], use_line_fit: bool = False,
             p.flatness = rms
             p.isFlat = rms < threshold
         else:
-            bead_count = 0 if p.floorMask is None else int((~p.floorMask).sum())
+            filament_count = 0 if p.floorMask is None else int((~p.floorMask).sum())
             p.flatness = None
-            p.isFlat = bead_count <= max_bead_points
+            p.isFlat = filament_count <= max_filament_points
 
 # Cascaded box-smoothing windows (points): first smooth the height, then the |slope|.
 HEIGHT_SMOOTH_WINDOWS = (15, 9, 5, 5)
 SLOPE_SMOOTH_WINDOWS = (65, 55, 15, 5)
-# Peak detection on the smoothed |dz/dx| (each bead flank shows up as a peak):
+# Peak detection on the smoothed |dz/dx| (each filament flank shows up as a peak):
 SLOPE_PEAK_MIN_HEIGHT = 0.15   # min smoothed-slope height to count as a flank peak
 SLOPE_PEAK_MIN_DISTANCE = 50   # min points between two peaks
 FLANK_FOOT_HEIGHT = 100        # smoothed height (~1 mm above the z=0 floor) marking a flank foot
 
 def _flank_foot(x: np.ndarray, y_smooth: np.ndarray, peak_idx: int, threshold: float,
                 toward_smaller_x: bool) -> int:
-    """Index of the flank foot: the point nearest the peak, moving toward the bead edge, where the
+    """Index of the flank foot: the point nearest the peak, moving toward the filament edge, where the
     smoothed height first drops to `threshold`. Falls back to the extreme edge point on that side if
     the height never gets that low (e.g. raised edge floor)."""
     if toward_smaller_x:
@@ -70,12 +70,12 @@ def _flank_foot(x: np.ndarray, y_smooth: np.ndarray, peak_idx: int, threshold: f
     return int(cand[np.argmin(x[cand])]) if cand.size else int(np.argmax(x))
 
 def width_from_smoothed_slope(profiles: list[profileData]) -> None:
-    """Bead width between the feet of the two OUTERMOST bead flanks.
+    """Filament width between the feet of the two OUTERMOST filament flanks.
 
     Smooths the height and its |dz/dx| with cascaded box filters (locally — no stored arrays), finds
     the flank peaks in the smoothed slope, keeps the furthest-left and furthest-right (intermediate
     peaks from surface texture are ignored), then walks each flank down to its foot near the floor so
-    the width sits at the bead base rather than mid-flank. Sets `width` and `peaks` (the two width-
+    the width sits at the filament base rather than mid-flank. Sets `width` and `peaks` (the two width-
     edge indices — flank feet); NaN / None when fewer than two flank peaks are found or the profile
     is too short.
     """
@@ -103,80 +103,80 @@ def width_from_smoothed_slope(profiles: list[profileData]) -> None:
         p.peaks = np.array([left_foot, right_foot])
         p.width = float(np.round(abs(p.x[right_foot] - p.x[left_foot]), decimals=2))
 
-def width_from_bead_edges(profiles: list[profileData]) -> None:
-    """Bead width from the outer bead points: the x-span between the leftmost and rightmost
-    bead point (uses `floorMask`). Sets `beadWidth` and `beadWidthIdx` (the two point indices).
-    Run after grow_profile_points; NaN / None when a profile has fewer than two bead points.
+def width_from_filament_edges(profiles: list[profileData]) -> None:
+    """Filament width from the outer filament points: the x-span between the leftmost and rightmost
+    filament point (uses `floorMask`). Sets `filamentWidth` and `filamentWidthIdx` (the two point indices).
+    Run after grow_profile_points; NaN / None when a profile has fewer than two filament points.
     """
     for p in profiles:
         if p.floorMask is None:
-            p.beadWidth = np.nan
-            p.beadWidthIdx = None
+            p.filamentWidth = np.nan
+            p.filamentWidthIdx = None
             continue
-        bead_idx = np.flatnonzero(~p.floorMask)
-        if bead_idx.size < 2:
-            p.beadWidth = np.nan
-            p.beadWidthIdx = None
+        filament_idx = np.flatnonzero(~p.floorMask)
+        if filament_idx.size < 2:
+            p.filamentWidth = np.nan
+            p.filamentWidthIdx = None
             continue
-        left = int(bead_idx[np.argmin(p.x[bead_idx])])   # bead point at smallest x
-        right = int(bead_idx[np.argmax(p.x[bead_idx])])  # bead point at largest x
-        p.beadWidthIdx = np.array([left, right])
-        p.beadWidth = float(np.round(abs(p.x[right] - p.x[left]), decimals=2))
+        left = int(filament_idx[np.argmin(p.x[filament_idx])])   # filament point at smallest x
+        right = int(filament_idx[np.argmax(p.x[filament_idx])])  # filament point at largest x
+        p.filamentWidthIdx = np.array([left, right])
+        p.filamentWidth = float(np.round(abs(p.x[right] - p.x[left]), decimals=2))
 
-HEIGHT_PERCENTILE = 95     # bead height = this percentile of the bead-point heights (robust to spikes)
+HEIGHT_PERCENTILE = 95     # filament height = this percentile of the filament-point heights (robust to spikes)
 MEDIAN_SMOOTH_WINDOW = 15  # median-filter window (points) for the smoothed-height measure
 
-def measure_bead_height(profiles: list[profileData], percentile: float = HEIGHT_PERCENTILE) -> None:
-    """Robust bead height above the shared median floor (z = 0 after rotate_and_shift_uniform), two ways.
+def measure_filament_height(profiles: list[profileData], percentile: float = HEIGHT_PERCENTILE) -> None:
+    """Robust filament height above the shared median floor (z = 0 after rotate_and_shift_uniform), two ways.
 
-    `beadHeight` is the `percentile`-th percentile of the bead points' z (uses `floorMask`), so a lone
-    outlier/noise spike above that percentile is ignored. `beadHeightSmooth` is the max of a
-    median-smoothed profile over the bead points — a median filter removes single-point spikes, so its
+    `filamentHeight` is the `percentile`-th percentile of the filament points' z (uses `floorMask`), so a lone
+    outlier/noise spike above that percentile is ignored. `filamentHeightSmooth` is the max of a
+    median-smoothed profile over the filament points — a median filter removes single-point spikes, so its
     peak is robust too; the two cross-check each other. Units: profile units (1 unit = 0.01 mm). NaN
-    when a profile has no bead points (no floorMask, or flat). Run after grow_profile_points.
+    when a profile has no filament points (no floorMask, or flat). Run after grow_profile_points.
     """
     for p in profiles:
-        p.beadHeight = np.nan
-        p.beadHeightSmooth = np.nan
+        p.filamentHeight = np.nan
+        p.filamentHeightSmooth = np.nan
         if p.floorMask is None:
             continue
-        bead = ~p.floorMask
-        bead_z = p.z[bead]
-        if bead_z.size == 0:
+        filament = ~p.floorMask
+        filament_z = p.z[filament]
+        if filament_z.size == 0:
             continue
-        p.beadHeight = float(np.round(np.percentile(bead_z, percentile), decimals=2))
+        p.filamentHeight = float(np.round(np.percentile(filament_z, percentile), decimals=2))
         z_smooth = sp.ndimage.median_filter(p.z, size=MEDIAN_SMOOTH_WINDOW, mode="nearest")
-        p.beadHeightSmooth = float(np.round(z_smooth[bead].max(), decimals=2))
+        p.filamentHeightSmooth = float(np.round(z_smooth[filament].max(), decimals=2))
 
-def _bead_area_integration(x: np.ndarray, h: np.ndarray) -> float:
-    """Bead cross-section by Simpson integration of the bead height h over x.
+def _filament_area_integration(x: np.ndarray, h: np.ndarray) -> float:
+    """Filament cross-section by Simpson integration of the filament height h over x.
 
     abs() so the result is independent of x direction (profiles are stored with x
     decreasing in index, which would otherwise flip the integral's sign).
 
     Known issue: Simpson fits parabolas through point triples, so on the rare profile whose
-    bead-span x is unevenly spaced, non-monotonic, or has near-coincident points (LIDAR jitter
+    filament-span x is unevenly spaced, non-monotonic, or has near-coincident points (LIDAR jitter
     at the flanks), the fit overshoots and this area spikes to a wrong value (~1 in 3000 profiles
     seen >50% off). `shoelaceArea` is piecewise-linear and immune, so it is the robust cross-check.
     """
     return abs(float(sp.integrate.simpson(h, x=x)))
 
-def _bead_area_shoelace(x: np.ndarray, h: np.ndarray) -> float:
-    """Bead cross-section by the shoelace formula on the closed polygon: the bead surface
+def _filament_area_shoelace(x: np.ndarray, h: np.ndarray) -> float:
+    """Filament cross-section by the shoelace formula on the closed polygon: the filament surface
     (x, h) plus the floor baseline (h = 0) that connects its two ends."""
     px = np.concatenate([x, [x[-1], x[0]]])   # close along the baseline (two h = 0 corners)
     ph = np.concatenate([h, [0.0, 0.0]])
     return 0.5 * float(abs(np.dot(px, np.roll(ph, 1)) - np.dot(ph, np.roll(px, 1))))
 
-def measure_bead_area(profiles: list[profileData]) -> None:
-    """Cross-sectional bead area, two ways, above the shared median floor (z = 0 after
+def measure_filament_area(profiles: list[profileData]) -> None:
+    """Cross-sectional filament area, two ways, above the shared median floor (z = 0 after
     rotate_and_shift_uniform levels every profile to it — deliberately NOT each profile's own fit).
 
-    Across the bead span (leftmost to rightmost bead point of floorMask) the height above the
+    Across the filament span (leftmost to rightmost filament point of floorMask) the height above the
     median floor is simply z. `area` integrates it with Simpson's rule; `shoelaceArea` is the
-    shoelace area of the polygon bounded by the bead surface and the z = 0 baseline. The two use
+    shoelace area of the polygon bounded by the filament surface and the z = 0 baseline. The two use
     different numerical schemes and should agree closely (a cross-check). Units: profile-unit^2
-    (1 unit = 0.01 mm, so 1 area unit = 1e-4 mm^2). NaN when a profile has fewer than two bead
+    (1 unit = 0.01 mm, so 1 area unit = 1e-4 mm^2). NaN when a profile has fewer than two filament
     points (no floorMask, or flat). Run after grow_profile_points.
     """
     for p in profiles:
@@ -184,13 +184,115 @@ def measure_bead_area(profiles: list[profileData]) -> None:
         p.shoelaceArea = np.nan
         if p.floorMask is None:
             continue
-        bead_idx = np.flatnonzero(~p.floorMask)
-        if bead_idx.size < 2:
+        filament_idx = np.flatnonzero(~p.floorMask)
+        if filament_idx.size < 2:
             continue
-        sl = slice(int(bead_idx.min()), int(bead_idx.max()) + 1)  # contiguous bead span, edge to edge
+        sl = slice(int(filament_idx.min()), int(filament_idx.max()) + 1)  # contiguous filament span, edge to edge
         x, h = p.x[sl], p.z[sl]                                    # h = height above the z = 0 median floor
-        p.area = float(np.round(_bead_area_integration(x, h), decimals=2))
-        p.shoelaceArea = float(np.round(_bead_area_shoelace(x, h), decimals=2))
+        p.area = float(np.round(_filament_area_integration(x, h), decimals=2))
+        p.shoelaceArea = float(np.round(_filament_area_shoelace(x, h), decimals=2))
+
+# Along-track spacing of profiles. 1 profile unit = 0.01 mm, so 1 m = 1e5 units. Each profile
+# advances rollerbandSpeed (m/s) * dt (s) along the print path (see profile_advance_distances);
+# when speed/time data is missing, profiles fall back to a uniform gap.
+METERS_TO_PROFILE_UNITS = 1e5
+UNIFORM_PROFILE_DISTANCE = 2000.0  # fallback along-track gap when speed/time is unavailable
+
+def profile_advance_distances(profiles: list[profileData]) -> np.ndarray:
+    """Per-profile along-path advance (profile units) from rollerbandSpeed (m/s) x inter-profile dt.
+
+    dt is taken from the sensor clock (`sensorTime` = timestamp_sec + timestamp_usec, monotonic and
+    low-jitter), falling back to `arrivalTime`; the first profile gets 0 (path origin). Missing speed
+    or a non-monotonic step yields 0 advance for that profile. If neither a time base nor
+    `rollerbandSpeed` is available at all (e.g. raw profiles without the PLC join), returns a uniform
+    `UNIFORM_PROFILE_DISTANCE` spacing (the pre-physical behaviour). Used by the 3D layout
+    (profile3Dplotting) and by measure_filament_volume.
+    """
+    n = len(profiles)
+    if n == 0:
+        return np.empty(0)
+    t = np.array([p.sensorTime if p.sensorTime is not None else np.nan for p in profiles], float)
+    if not np.any(np.isfinite(t)):  # no sensor clock (e.g. old cache) -> capture-PC clock
+        t = np.array([p.arrivalTime if p.arrivalTime is not None else np.nan for p in profiles], float)
+    speed = np.array([p.rollerbandSpeed if p.rollerbandSpeed is not None else np.nan for p in profiles], float)
+    if not np.any(np.isfinite(t)) or not np.any(np.isfinite(speed)):
+        return np.full(n, UNIFORM_PROFILE_DISTANCE)
+
+    dist = np.zeros(n)
+    dt = np.diff(t)                             # seconds between consecutive profiles
+    speed_mid = 0.5 * (speed[:-1] + speed[1:])  # mean belt speed over each interval
+    dist[1:] = speed_mid * dt * METERS_TO_PROFILE_UNITS
+    dist[~np.isfinite(dist)] = 0.0             # missing speed/time on a profile -> no advance
+    dist[dist < 0.0] = 0.0                     # guard non-monotonic time
+    return dist
+
+def measure_filament_volume(profiles: list[profileData]) -> None:
+    """Volume of each filament segment (a run of consecutive non-flat profiles bounded by flat ones).
+
+    Volume is the cross-section integrated along the print path: over each segment, the sum of
+    `shoelaceArea` x the inter-profile advance (`profile_advance_distances`) — a left-Riemann sum of
+    area x d(path). Sets two per-profile fields, both in native units (area-unit * distance-unit;
+    convert to cm^3 with 1e-9 via FEATURE_DISPLAY):
+
+    - `sliceVolume`: this profile's own slab, `shoelaceArea_i * dist_i` (NaN if its area is NaN, i.e.
+      a degenerate < 2-filament-point profile).
+    - `segmentVolume`: the whole segment's total (NaN slices count as 0), broadcast onto every profile
+      in the run so the segment reads as one value.
+
+    Flat profiles (and any before/after a segment) keep both as None. Needs the PLC-joined
+    `rollerbandSpeed` for physical distances (else the uniform-gap fallback); run after
+    `flag_flat_profiles` and `measure_filament_area`.
+    """
+    dist = profile_advance_distances(profiles)
+    for p in profiles:
+        p.segmentVolume = None
+        p.sliceVolume = None
+    mask = np.array([not bool(p.isFlat) for p in profiles])  # True = filament (non-flat) profile
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        return
+    for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):  # maximal non-flat runs = segments
+        slices = np.array([p.shoelaceArea if p.shoelaceArea is not None else np.nan
+                           for p in (profiles[i] for i in run)], float) * dist[run]
+        total = float(np.nansum(slices))  # NaN slice (degenerate area) contributes 0 to the total
+        for i, s in zip(run, slices):
+            profiles[i].sliceVolume = float(s)
+            profiles[i].segmentVolume = total
+
+def _contiguous_runs(mask: np.ndarray) -> list[np.ndarray]:
+    """List of index arrays, one per maximal run of consecutive True values in `mask`."""
+    idx = np.flatnonzero(mask)
+    if idx.size == 0:
+        return []
+    return np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1)
+
+def measure_run_lengths(profiles: list[profileData]) -> None:
+    """Along-path length of each filament segment and each pure-floor (defect) run.
+
+    Sums the inter-profile advance (`profile_advance_distances`) over each maximal run of like
+    profiles, broadcasting the total onto every profile in the run (so a run reads as one value):
+
+    - `segmentLength`: length of a filament segment — a run of non-flat profiles (`isFlat` False).
+    - `defectLength`: length of a pure-floor gap — a run of flat profiles (no filament).
+
+    Both are in distance units (0.01 mm; convert to mm with 0.01 via FEATURE_DISPLAY). Every profile
+    gets exactly one of the two set (the other stays None), by whether it is flat. Needs the PLC-joined
+    `rollerbandSpeed` for physical distances (else the uniform-gap fallback); run after
+    `flag_flat_profiles`.
+    """
+    dist = profile_advance_distances(profiles)
+    for p in profiles:
+        p.segmentLength = None
+        p.defectLength = None
+    flat = np.array([bool(p.isFlat) for p in profiles])
+    for run in _contiguous_runs(~flat):  # filament segments
+        total = float(np.sum(dist[run]))
+        for i in run:
+            profiles[i].segmentLength = total
+    for run in _contiguous_runs(flat):   # pure-floor defects
+        total = float(np.sum(dist[run]))
+        for i in run:
+            profiles[i].defectLength = total
 
 def translate_floor_to_zero(profiles: list[profileData]):
     for p in profiles:
@@ -220,7 +322,7 @@ def rotate_and_shift_uniform(profiles: list[profileData]):
 
     Applies the median per-profile tilt and floor offset to every profile, so the real
     height differences between profiles are preserved (only a common tilt/offset removed).
-    Median is robust to the bad baseline fits of beaded profiles. Returns the uniform transform
+    Median is robust to the bad baseline fits of profiles containing filament. Returns the uniform transform
     as ``(angle, offset)`` (angle in radians) so it can be inverted later to recover the
     pre-leveling coordinates without reloading the raw file (see ``unlevel_profiles``).
     """
@@ -279,33 +381,33 @@ def unlevel_profiles(profiles: list[profileData], angle: float, offset: float) -
     return restored
 
 
-# z above this (~1 mm) seeds a confident bead point; at/below it is floor.
-FLOOR_POINT_THRESHOLD = 100
-# grow the bead into connected points down to this height (~0.2 mm); below stays floor.
-PROFILE_GROW_THRESHOLD = 20
-MIN_SEED_LENGTH = 3   # a bead core must span >= this many points (rejects lone spikes)
-PROFILE_FILL_GAP = 5  # fill interior floor gaps up to this many points to solidify the bead
+# z above this (100~1 mm) seeds a confident filament point; at/below it is floor.
+FLOOR_POINT_THRESHOLD = 250
+# grow the filament into connected points down to this height (20~0.2 mm); below stays floor.
+PROFILE_GROW_THRESHOLD = 150
+MIN_SEED_LENGTH = 3   # a filament core must span >= this many points (rejects lone spikes)
+PROFILE_FILL_GAP = 5  # fill interior floor gaps up to this many points to solidify the filament
 
-# Positional prior: the bead sits near the scan's middle, so points far from centre need more
-# height to count as bead (suppresses raised edge floor being mislabelled). The penalty is 0
+# Positional prior: the filament sits near the scan's middle, so points far from centre need more
+# height to count as filament (suppresses raised edge floor being mislabelled). The penalty is 0
 # within a central plateau, ramping to EDGE_HEIGHT_PENALTY at the edge; added to the seed and
 # grow thresholds. t = |x - centre| / half-width (0 = centre, 1 = edge).
-BEAD_CENTER_HALFWIDTH = 0.4   # central |t| with no penalty (real beads fade out by ~0.45)
-EDGE_HEIGHT_PENALTY = 400     # z units (~4 mm) added to the bead thresholds at the edge
+FILAMENT_CENTER_HALFWIDTH = 0.4   # central |t| with no penalty (real filaments fade out by ~0.45)
+EDGE_HEIGHT_PENALTY = 400     # z units (~4 mm) added to the filament thresholds at the edge
 
 def position_height_penalty(x: np.ndarray) -> np.ndarray:
     """Per-point height penalty (z units) rising from 0 in the centre to EDGE_HEIGHT_PENALTY
-    at the profile edges, so points far from the middle need more height to be classed as bead."""
+    at the profile edges, so points far from the middle need more height to be classed as filament."""
     lo, hi = float(np.min(x)), float(np.max(x))
     half = 0.5 * (hi - lo)
     if half == 0:
         return np.zeros_like(x, dtype=float)
     t = np.abs((x - 0.5 * (lo + hi)) / half)                          # 0 centre .. 1 edge
-    ramp = np.clip((t - BEAD_CENTER_HALFWIDTH) / (1.0 - BEAD_CENTER_HALFWIDTH), 0.0, 1.0)
+    ramp = np.clip((t - FILAMENT_CENTER_HALFWIDTH) / (1.0 - FILAMENT_CENTER_HALFWIDTH), 0.0, 1.0)
     return EDGE_HEIGHT_PENALTY * ramp
 
 def _categorization_height(p: profileData, use_profile_baseline: bool) -> np.ndarray:
-    """Point heights used for the floor/bead thresholds.
+    """Point heights used for the floor/filament thresholds.
 
     Default: the uniform (median) levelled z, which keeps the real height differences between
     profiles (good for visualisation). With use_profile_baseline, heights are measured above
@@ -320,11 +422,11 @@ def _categorization_height(p: profileData, use_profile_baseline: bool) -> np.nda
 def categorize_floor_points(profiles: list[profileData], threshold: float = FLOOR_POINT_THRESHOLD,
                             use_profile_baseline: bool = False):
     """Set floorMask (True = floor) by height plus a positional prior: floor where
-    height <= threshold + position penalty (edge points need more height to seed bead).
+    height <= threshold + position penalty (edge points need more height to seed filament).
 
     height is the uniform (median) levelled z by default, or each profile's own floor-relative
     height when use_profile_baseline is set (see _categorization_height). Non-destructive,
-    vectorised. Pair with grow_profile_points (same flag) to add the bead flanks.
+    vectorised. Pair with grow_profile_points (same flag) to add the filament flanks.
     """
     for p in profiles:
         height = _categorization_height(p, use_profile_baseline)
@@ -342,14 +444,14 @@ def _runs_at_least(mask: np.ndarray, min_len: int) -> np.ndarray:
     return out
 
 
-def _fill_interior_gaps(bead: np.ndarray, max_gap: int) -> np.ndarray:
-    """Fill floor gaps <= max_gap that are flanked by bead on both sides."""
-    out = bead.copy()
-    idx = np.flatnonzero(~bead)
+def _fill_interior_gaps(filament: np.ndarray, max_gap: int) -> np.ndarray:
+    """Fill floor gaps <= max_gap that are flanked by filament on both sides."""
+    out = filament.copy()
+    idx = np.flatnonzero(~filament)
     if idx.size:
         for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
             lo, hi = run[0], run[-1]
-            if 0 < lo and hi < bead.size - 1 and run.size <= max_gap and bead[lo - 1] and bead[hi + 1]:
+            if 0 < lo and hi < filament.size - 1 and run.size <= max_gap and filament[lo - 1] and filament[hi + 1]:
                 out[run] = True
     return out
 
@@ -357,12 +459,12 @@ def _fill_interior_gaps(bead: np.ndarray, max_gap: int) -> np.ndarray:
 def grow_profile_points(profiles: list[profileData], low_threshold: float = PROFILE_GROW_THRESHOLD,
                         min_seed_length: int = MIN_SEED_LENGTH, max_gap: int = PROFILE_FILL_GAP,
                         use_profile_baseline: bool = False):
-    """Hysteresis: a run of points above the grow threshold touching a bead seed becomes bead.
+    """Hysteresis: a run of points above the grow threshold touching a filament seed becomes filament.
 
     Seeds shorter than min_seed_length are ignored (lone spikes); after growing, interior
-    floor gaps up to max_gap are filled. Recovers flanks and keeps the bead solid; isolated
+    floor gaps up to max_gap are filled. Recovers flanks and keeps the filament solid; isolated
     low bumps and true floor stay floor. The grow threshold is raised toward the edges by the
-    positional prior, so the bead is not grown into raised edge floor. use_profile_baseline sets
+    positional prior, so the filament is not grown into raised edge floor. use_profile_baseline sets
     the grow height basis; it is usually the same as categorize_floor_points's, but may differ
     (seed on one basis, grow on another) — as configured in process_profiles. Assumes ordered
     points. Updates floorMask.
@@ -370,15 +472,15 @@ def grow_profile_points(profiles: list[profileData], low_threshold: float = PROF
     for p in profiles:
         if p.floorMask is None:
             continue
-        seed = _runs_at_least(~p.floorMask, min_seed_length)   # bead cores, lone spikes dropped
+        seed = _runs_at_least(~p.floorMask, min_seed_length)   # filament cores, lone spikes dropped
         candidate = _categorization_height(p, use_profile_baseline) > low_threshold + position_height_penalty(p.x)
-        bead = np.zeros(p.z.shape, dtype=bool)
+        filament = np.zeros(p.z.shape, dtype=bool)
         if candidate.any():
             idx = np.flatnonzero(candidate)
             for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
-                if seed[run].any():       # run touches a bead core -> whole run is bead
-                    bead[run] = True
-        p.floorMask = ~_fill_interior_gaps(bead, max_gap)
+                if seed[run].any():       # run touches a filament core -> whole run is filament
+                    filament[run] = True
+        p.floorMask = ~_fill_interior_gaps(filament, max_gap)
 
 
 def moving_average(arr, window_size):
@@ -391,7 +493,7 @@ def get_baseline_from_profileBorder(x, y, borderPoints=150, iters=BASELINE_FIT_I
     """Fit the floor line (m, b) from the border points, robust to the raised paper edge.
 
     Iterative lower-envelope: pull points above the current fit down onto it and refit, so
-    the line descends past the curled-up edge (and any bead intruding into the border) onto
+    the line descends past the curled-up edge (and any filament intruding into the border) onto
     the flat floor instead of averaging through them.
     """
     n = borderPoints

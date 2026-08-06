@@ -17,7 +17,7 @@ The system has two halves that meet at an HDF5 file:
                                                                   ▼
                         profileProcessing.py  ──────►  *_processed.h5  (small processed cache)
                         (process once: level →                    │ read
-                         categorise floor/bead → width)           ▼
+                         categorise floor/filament → width)           ▼
                                                             dataAnalysis.py
                                                             (plot workbench: cache → 3D)
 ```
@@ -39,10 +39,10 @@ The system has two halves that meet at an HDF5 file:
 | ------ | -------------- | ------ |
 | `rawProfileUdpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileDataRaw`. | Active (standalone) |
 | `profilePointsClass.py` | Defines the analysis `profileData` dataclass **only** — the pure data model, no processing logic and no project imports. | Active |
-| `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, floor/bead categorisation, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`). Imports only `profilePointsClass`. | Active |
+| `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, floor/filament categorisation, area, filament-segment volume, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`), and the along-track spacing helper `profile_advance_distances` (shared with the 3D layout). Imports only `profilePointsClass`. | Active |
 | `profileLoading.py` | `load_profiles()` / `save_profiles()` — read/write `profileData` to HDF5. `save_profiles` writes the processed cache as a **columnar table** (padded `[N,L]` points, `[N,2]` index pairs, `[N]` scalar columns, names) for fast bulk loading; `load_profiles` reads that, and reads raw acquisition files (`x`/`z` + `arrival_time`, rest ignored), but **rejects** an old per-group *processed* cache with a "reprocess" error. `read_file_attrs()` returns file-level attributes (e.g. `raw_start`/`raw_end`). | Active |
 | `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). Imports only `profilePointsClass`. | Active |
-| `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, see `profile_advance_distances`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
+| `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, via `profile_advance_distances`, imported from `profileProcessingAlgorithms`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
 | `featureComparison.py` | `compare_features()` — matplotlib 2D overlay comparing several per-profile features over time, each robustly normalised to 0–1 (percentile-clipped so outliers don't flatten it), with a `CheckButtons` panel to toggle curves. Imports `profilePointsClass` + `FEATURE_DISPLAY`. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `datasetConfig.py` | The active experiment's file paths (`RAW_FILE`, `PLC_FILE`, derived `PROCESSED_FILE`) in one place, imported by both entry points so they can't drift. Switch datasets by moving the "ACTIVE" pair; others kept commented. | Active |
@@ -60,7 +60,7 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
  profilePointsClass          base layer — the profileData model only, no project imports
    ▲    ▲    ▲    ▲
    │    │    │    └── plcData                PLC CSV load + timestamp join (imports profilePointsClass)
-   │    │    └─────── profile3Dplotting      PyVista plotting (imports profilePointsClass + plcData)
+   │    │    └─────── profile3Dplotting      PyVista plotting (imports profilePointsClass + plcData + profileProcessingAlgorithms)
    │    │                   ▲
    │    │                   └── featureComparison   matplotlib 2D feature overlay (imports FEATURE_DISPLAY)
    │    └──────────── profileProcessingAlgorithms  processing fns + FLATNESS_RMS_THRESHOLD
@@ -77,7 +77,8 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
 
 Edges: `profileProcessingAlgorithms`, `profileLoading`, `profile3Dplotting`, and `plcData` each
 import `profilePointsClass`; `profileLoading` also imports `profileProcessingAlgorithms`
-(`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`PLC_COLUMNS`); and
+(`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`PLC_COLUMNS`) and
+`profileProcessingAlgorithms` (`profile_advance_distances`); and
 `featureComparison` imports `profilePointsClass` + `profile3Dplotting` (`FEATURE_DISPLAY`). The
 entry points compose these: `profileProcessing` imports `profileLoading` +
 `profileProcessingAlgorithms` + `plcData`; `dataAnalysis` imports `profileLoading` +
@@ -119,20 +120,20 @@ plotter.show()                           # interactive PyVista window
 1. `rotate_and_shift_uniform` — level **all** profiles by one **median** rotation + shift
    (derived from each profile's floor fit), preserving the real height differences between
    profiles. Also stores each profile's own floor fit in `m`/`b`.
-2. `categorize_floor_points` — per-point `floorMask` (floor vs bead) by height, with a symmetric
-   **positional prior** (points far from the scan centre need more height to count as bead).
-3. `grow_profile_points` — hysteresis: grow the bead from confident seeds into their connected
+2. `categorize_floor_points` — per-point `floorMask` (floor vs filament) by height, with a symmetric
+   **positional prior** (points far from the scan centre need more height to count as filament).
+3. `grow_profile_points` — hysteresis: grow the filament from confident seeds into their connected
    lower flanks, then fill small interior gaps.
-4. `flag_flat_profiles` — mark a profile flat when it has **no bead points** (floor only). The
+4. `flag_flat_profiles` — mark a profile flat when it has **no filament points** (floor only). The
    old line-fit-residual method is kept behind `use_line_fit=True`.
-5. `width_from_smoothed_slope` — bead width between the feet of the two **outermost** bead flanks:
+5. `width_from_smoothed_slope` — filament width between the feet of the two **outermost** filament flanks:
    smooths z and |dz/dx| internally, finds the outer flank peaks, then walks each flank down to its
-   foot near the floor (so the markers sit at the bead base, not mid-flank).
-6. `width_from_bead_edges` — bead width the other way: the x-span between the outer bead points.
-7. `measure_bead_height` — robust bead height above the `z = 0` median floor, two ways: the 95th
-   percentile of the bead points' z → `beadHeight`, and the max of a median-smoothed profile →
-   `beadHeightSmooth` (both ignore outlier spikes).
-8. `measure_bead_area` — cross-sectional bead area over the shared `z = 0` median floor, two
+   foot near the floor (so the markers sit at the filament base, not mid-flank).
+6. `width_from_filament_edges` — filament width the other way: the x-span between the outer filament points.
+7. `measure_filament_height` — robust filament height above the `z = 0` median floor, two ways: the 95th
+   percentile of the filament points' z → `filamentHeight`, and the max of a median-smoothed profile →
+   `filamentHeightSmooth` (both ignore outlier spikes).
+8. `measure_filament_area` — cross-sectional filament area over the shared `z = 0` median floor, two
    ways (Simpson integration → `area`, shoelace polygon → `shoelaceArea`) as a mutual cross-check.
 
 After the geometry pipeline, the entry point runs one more step **outside** `process_profiles`
@@ -143,16 +144,27 @@ Windows FILETIME converted to Unix and corrected for the PLC clock offset (`PLC_
 and each profile takes the **nearest-in-time** PLC sample. Profiles outside the two streams'
 mutual time overlap are dropped (a contiguous head/tail trim); the surviving raw index span is
 stored on the cache as `raw_start`/`raw_end` so the plot workbench can load the matching raw slice.
+Then `measure_filament_volume` and `measure_run_lengths` (`profileProcessingAlgorithms`) run — also
+outside `process_profiles`, because they need the physical inter-profile distances
+(`profile_advance_distances`, from `rollerbandSpeed`, populated only by the join).
+`measure_filament_volume` integrates `shoelaceArea` along the print path over each **filament segment**
+(a run of non-flat profiles between flat ones), setting `segmentVolume` (the segment total, broadcast
+onto its profiles) and `sliceVolume` (each profile's own `area × gap` slab). `measure_run_lengths` sums
+the advance over each run and broadcasts the total: `segmentLength` (filament-segment length) and
+`defectLength` (length of a pure-floor / no-filament gap).
 
-The plot workbench (`dataAnalysis.py`) draws floor vs bead in two colours (`category=`), flat
+The plot workbench (`dataAnalysis.py`) draws floor vs filament in two colours (`category=`), flat
 profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
 (`"baseline"` / `"zeroBaseline"`), and both width methods' points (`"widthPoints"` /
-`"beadWidthPoints"`). It can also colour the bead by a per-profile feature with a live
+`"filamentWidthPoints"`). It can also colour the filament by a per-profile feature with a live
 selector panel (`plot_feature_heatmap`): all features are attached to the cloud as separate
 scalar arrays, so clicking a feature button only repoints the mapper and rescales the colour bar.
 Selectable features include the geometry measures (width / height / area, grouped and shown in
-mm / mm²) and each joined PLC channel (its own colour range, in the PLC's native units) — set by
-`FEATURE_DISPLAY` in `profile3Dplotting.py`.
+mm / mm²), the two filament-segment volumes (`segmentVolume` / `sliceVolume`, each its own colour
+group, in cm³), the run lengths (`segmentLength` in mm; `defectLength` in mm via the `category="floor"`
+view, since a pure-floor gap has no filament points to colour) and each joined PLC channel (its own
+colour range, in the PLC's native units) — set by `FEATURE_DISPLAY` in `profile3Dplotting.py`. A
+bottom-right radio group switches the colour scale (linear / log / clip / rank) live.
 
 For comparing features against each other (rather than one at a time in space),
 `featureComparison.compare_features` (matplotlib) overlays several as time series on one axis,
@@ -227,14 +239,16 @@ array keyed by profile index (profile *i* = row *i*), so the whole cache loads i
 reads instead of ~N tiny per-group reads (measured **~142 s → ~5 s** on the 90.7k Exp1 cache):
 
 - **`/points`** (per-point arrays, padded): `x`, `z` (rotated + levelled coordinates) and `floorMask`
-  (per-point floor/bead split) as `[N, L]` matrices (L = max point count), with `lengths` `[N]`
+  (per-point floor/filament split) as `[N, L]` matrices (L = max point count), with `lengths` `[N]`
   giving each profile's valid point count; plus `peaks` (the two width-edge / flank-foot indices) and
-  `beadWidthIdx` (the two outer bead-point indices) as `[N, 2]` int (`-1` = absent / None).
+  `filamentWidthIdx` (the two outer filament-point indices) as `[N, 2]` int (`-1` = absent / None).
 - **`/scalars`** — every per-profile *scalar* field as a length-N `float64` dataset (NaN = unset):
-  `m`/`b` (floor fit), `width` (smoothed-slope flank-foot method, NaN when < 2 flanks), `beadWidth`
-  (bead-edge method), `beadHeight` / `beadHeightSmooth` (robust bead heights, percentile vs
-  median-smoothed; NaN when flat), `area` / `shoelaceArea` (bead cross-section, integration vs
-  shoelace; NaN when flat), `isFlat`, `flatness` (line-fit RMS residual; unset for the default
+  `m`/`b` (floor fit), `width` (smoothed-slope flank-foot method, NaN when < 2 flanks), `filamentWidth`
+  (filament-edge method), `filamentHeight` / `filamentHeightSmooth` (robust filament heights, percentile vs
+  median-smoothed; NaN when flat), `area` / `shoelaceArea` (filament cross-section, integration vs
+  shoelace; NaN when flat), `segmentVolume` / `sliceVolume` (filament-segment total vs per-profile slab
+  volume; unset for flat profiles), `segmentLength` (filament-run length; unset on flat) / `defectLength`
+  (pure-floor-run length; unset on non-flat), `isFlat`, `flatness` (line-fit RMS residual; unset for the default
   floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor clock
   seconds, for inter-profile dt), and the 10 joined PLC channels (`mortarPumpFlow`, `pressure*`,
   `printHead*`, `rollerband*`, `viscoPump*`).
@@ -275,7 +289,7 @@ Severity is relative to *current* behaviour. Full remediation backlog in
 | 2 | ~~**Name collision** between the wire-format `ProfileData` (`rawProfileUdpCapturing.py`) and analysis `profileData` (`profilePointsClass.py`).~~ **Resolved:** the wire-format class is now `ProfileDataRaw`. | — |
 | 3 | **Wildcard imports** (`from x import *`) — now confined to the dormant `profileRegistration.py`; the active analysis modules use explicit imports. | Low — limited to off-path legacy code. |
 | 4 | **Magic constants** — many are now named in `profileProcessingAlgorithms.py` (`MIN_PROFILE_POINTS`, `FLOOR_POINT_THRESHOLD`, the positional-prior, slope-peak and smoothing-window constants). Still un-named: path geometry `2000/5000/80000` (`profile3Dplotting.py`), the UDP address/port and parser byte offsets (`rawProfileUdpCapturing.py`). Values are unit-dependent (1 unit ≈ 0.01 mm). | Medium — a shared `config` module is still wanted for the rest. |
-| 5 | **Dead code & unused imports** (active pipeline cleared): the CSV loaders, `find_border_points`, the `borderPoints` field, and unused imports were removed. Remaining is out-of-scope legacy (`profileRegistration.py`); the `profilePointsClass.py` max-height block is intentionally kept for later (the area block it sat with is now implemented as `measure_bead_area`). | Low — clutter, risk of "fixing" code that never runs. |
+| 5 | **Dead code & unused imports** (active pipeline cleared): the CSV loaders, `find_border_points`, the `borderPoints` field, and unused imports were removed. Remaining is out-of-scope legacy (`profileRegistration.py`); the `profilePointsClass.py` max-height block is intentionally kept for later (the area block it sat with is now implemented as `measure_filament_area`). | Low — clutter, risk of "fixing" code that never runs. |
 | 6 | **Missing type hints & docstrings** on most module-level functions. | Low/Medium — slows comprehension; no static-analysis safety net. |
 | 7 | **No error handling at boundaries**: HDF5 load assumes well-formed files; UDP parser uses a broad `except Exception` and unbounded buffering dicts. | Medium — silent data loss / memory growth on malformed or out-of-order packets. |
 | 8 | **Hardcoded paths & IP** in the entry scripts. | Low — non-portable; blocks reuse on another machine. |

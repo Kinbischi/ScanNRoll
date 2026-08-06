@@ -13,18 +13,22 @@ class profileData:
     m: Optional[float] = None
     b: Optional[float] = None
 
-    floorMask: Optional[np.ndarray] = None  # per-point bool: True = floor point, False = profile (bead)
+    floorMask: Optional[np.ndarray] = None  # per-point bool: True = floor point, False = profile (filament)
     peaks: Optional[np.ndarray] = None      # the two width-edge indices (flank feet)
     width: Optional[float] = None
-    beadWidthIdx: Optional[np.ndarray] = None  # indices of the two outer bead points (bead-edge width)
-    beadWidth: Optional[float] = None          # x-span between the two outer bead points
-    beadHeight: Optional[float] = None         # robust bead height (95th pct of bead z above z=0)
-    beadHeightSmooth: Optional[float] = None   # robust bead height (max of median-smoothed z above z=0)
+    filamentWidthIdx: Optional[np.ndarray] = None  # indices of the two outer filament points (filament-edge width)
+    filamentWidth: Optional[float] = None          # x-span between the two outer filament points
+    filamentHeight: Optional[float] = None         # robust filament height (95th pct of filament z above z=0)
+    filamentHeightSmooth: Optional[float] = None   # robust filament height (max of median-smoothed z above z=0)
     isFlat: Optional[bool] = None
     flatness: Optional[float] = None
-    area: Optional[float] = None           # bead cross-section, Simpson integration (profile-unit^2)
-    shoelaceArea: Optional[float] = None   # bead cross-section, shoelace polygon (profile-unit^2)
+    area: Optional[float] = None           # filament cross-section, Simpson integration (profile-unit^2)
+    shoelaceArea: Optional[float] = None   # filament cross-section, shoelace polygon (profile-unit^2)
     shoelaceArea2: Optional[float] = None
+    segmentVolume: Optional[float] = None  # total volume of this profile's filament segment (area-unit*dist-unit)
+    sliceVolume: Optional[float] = None    # this profile's own slab volume, shoelaceArea * inter-profile gap
+    segmentLength: Optional[float] = None  # along-path length of this profile's filament segment (dist units)
+    defectLength: Optional[float] = None   # along-path length of this profile's pure-floor (no-filament) run
     maxSmoothedHeight: Optional[float] = None
     maxSmoothedPlace: Optional[int] = None
     maxHeight: Optional[float] = None

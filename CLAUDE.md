@@ -20,17 +20,22 @@ OX200 LIDAR sensor for additive-manufacturing ("Rollerband") research.
 **Domain primer (one read and you understand the data):**
 - A **profile** = one cross-sectional scan: arrays `x` (across-track position)
   and `z` (height). Units: 1 unit ≈ 0.01 mm.
-- The **baseline / floor** = the flat substrate the printed bead sits on; estimated from
+- The **baseline / floor** = the flat substrate the printed filament sits on; estimated from
   each profile's left/right edges (`get_baseline_from_profileBorder`). Leveling applies
   **one median** rotation + shift to the whole set (keeping the real relative heights
   between profiles) and stores each profile's own floor fit in `m`/`b`.
-- **Floor vs bead categorization** = a per-point `floorMask` splitting each profile into the
-  flat **floor** (substrate) and the raised **bead** (printed material). Most downstream
-  features build on it; a profile with no bead points is **flat**.
-- The **width** = how wide the bead is, measured two ways: between the two outermost
-  smoothed-slope peaks, and directly as the x-span between the outer bead points.
-- The **area** = the bead's cross-section above the shared `z = 0` median floor, measured two
+- **Floor vs filament categorization** = a per-point `floorMask` splitting each profile into the
+  flat **floor** (substrate) and the raised **filament** (printed material). Most downstream
+  features build on it; a profile with no filament points is **flat**.
+- The **width** = how wide the filament is, measured two ways: between the two outermost
+  smoothed-slope peaks, and directly as the x-span between the outer filament points.
+- The **area** = the filament's cross-section above the shared `z = 0` median floor, measured two
   ways as a cross-check: Simpson integration (`area`) and the shoelace polygon (`shoelaceArea`).
+- The **volume / length** = per-run aggregates along the print path (a *segment* = a run of filament
+  profiles between flat ones): segment volume (`segmentVolume`, cross-section integrated over the
+  segment) and per-profile slab (`sliceVolume`); segment length (`segmentLength`) and the length of
+  each pure-floor gap between segments (`defectLength`). Computed after the PLC join (they need the
+  physical inter-profile spacing from `rollerbandSpeed`).
 - **Registration** (currently dormant) = aligning overlapping left/centre/right
   profiles in `x` and joining them into one combined profile.
 

@@ -29,6 +29,18 @@ This project does not yet use formal version numbers; changes accumulate under
   index would overflow int64). Cuts the overlay cell's two voxel passes from ~13 s to ~2.5 s.
 
 ### Changed
+- **Renamed the deposited-material term `bead` → `filament`** throughout the active code and docs, to
+  match the concrete-3D-printing domain. This renames the four `profileData` fields
+  `beadWidth`/`beadHeight`/`beadHeightSmooth`/`beadWidthIdx` → `filamentWidth`/`filamentHeight`/
+  `filamentHeightSmooth`/`filamentWidthIdx`, the functions `width_from_bead_edges` →
+  `width_from_filament_edges`, `measure_bead_height` → `measure_filament_height`, `measure_bead_area`
+  → `measure_filament_area`, the plot subject `"beadWidthPoints"` → `"filamentWidthPoints"`, the
+  heat-map feature keys, and the `BEAD_CENTER_HALFWIDTH` constant → `FILAMENT_CENTER_HALFWIDTH`
+  (value unchanged). Pure rename — no numeric or plot-output change. Because the renamed fields are
+  stored under their new names in the columnar cache (`/scalars/filament*`, `/points/filamentWidthIdx`),
+  **reprocess (`python profileProcessing.py`) — pre-rename caches no longer load** (they raise on the
+  missing `filamentWidthIdx` dataset). The earlier changelog entries below keep the old `bead*` names
+  as the record of what those features were called when introduced.
 - **Physical profile spacing in the 3D layout.** `plottingClass` now places each profile along the
   print path by its real along-track advance — `rollerbandSpeed` (m/s) × the inter-profile dt — via
   the new `profile_advance_distances`, instead of a uniform 20 mm gap. dt comes from the sensor
@@ -71,6 +83,41 @@ This project does not yet use formal version numbers; changes accumulate under
   they were never persisted (`_TRANSIENT_FIELDS` is now empty). Old caches still load.
 
 ### Added
+- **Filament-segment length + pure-floor defect length (mm heat-map features).** New
+  `measure_run_lengths()` in `profileProcessingAlgorithms.py` sums the along-path advance
+  (`profile_advance_distances`) over each maximal run of like profiles and broadcasts the total onto
+  every profile in the run: `segmentLength` on a filament segment (run of non-flat profiles) and
+  `defectLength` on a pure-floor gap (run of flat, no-filament profiles). Both are stored in distance
+  units and shown in **mm** (factor 0.01), each its own heat-map colour group. Runs in
+  `profileProcessing.main()` after the PLC join (needs `rollerbandSpeed` for physical distances), next
+  to `measure_filament_volume`. `segmentLength` is selectable in the filament heat-map; because
+  `defectLength` lives on flat profiles (which have no filament points), `plot_feature_heatmap` gained
+  a `category` argument ("profile" default / "floor") and a new `dataAnalysis.py` cell colours the
+  floor points by `defectLength`. Reprocess to populate the new fields.
+- **Live colour-scale modes for the feature heat-map.** `plot_feature_heatmap` gained a second radio
+  group (bottom-right corner) that sets the active feature's colour scale in real time — **linear**
+  (full min–max, default, unchanged), **log** (`LookupTable.log_scale`; range from the smallest
+  positive value, falling back to linear for a feature with no positive values), **clip** (2–98th
+  percentile over the *distinct* per-segment values, so one outlier segment saturates instead of
+  squashing the rest — size-unbiased), and **rank** (dense rank 0–1, tie-safe so a profile's points
+  stay one colour). Fixes a single large `segmentVolume` making the smaller segments indistinguishable.
+  Each mode is precomputed per feature in `_build_feature_cloud` (a `__rank` companion array + a
+  per-mode clim map) and applied by the new `_apply_scale`; the colour-bar label announces the mode.
+  All in `profile3Dplotting.py`; no cache/pipeline change.
+- **Filament-segment volume (two measures, cm³ heat-map features).** New `measure_filament_volume()`
+  in `profileProcessingAlgorithms.py` integrates each profile's cross-section (`shoelaceArea`) along the
+  print path over each **filament segment** — a run of consecutive non-flat profiles bounded by flat,
+  pure-floor profiles (`isFlat`). It sets two per-profile fields (native units area-unit×distance-unit;
+  `FEATURE_DISPLAY` converts by `1e-9` to **cm³**): `segmentVolume` (the segment's total, `Σ shoelaceArea
+  × inter-profile advance`, broadcast onto every profile in the run so a segment reads as one colour) and
+  `sliceVolume` (each profile's own slab `shoelaceArea × its gap`, so the heat-map shows variation along a
+  filament). Both are selectable heat-map features, each in its own colour group (a segment total is
+  ~10²–10³× a single slice, so they don't share a `clim`). It runs in `profileProcessing.main()` **after**
+  the PLC join (it needs `rollerbandSpeed` for the physical inter-profile distances) rather than inside
+  `process_profiles`. The distance helper `profile_advance_distances` (with `METERS_TO_PROFILE_UNITS` /
+  `UNIFORM_PROFILE_DISTANCE`) moved from `profile3Dplotting.py` to `profileProcessingAlgorithms.py` so both
+  the 3D layout and the volume step share it (no plotting→processing back-edge, no duplication); the layout
+  imports it back and is unchanged. Reprocess to populate the new fields.
 - **Store the leveling transform so the before/after overlay needs no raw reload.**
   `rotate_and_shift_uniform` now returns its uniform `(angle, offset)`, `process_profiles` passes it
   out, and `profileProcessing` saves it on the cache as `level_angle`/`level_offset`. The new

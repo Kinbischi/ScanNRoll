@@ -10,7 +10,7 @@ from profileProcessingAlgorithms import FLATNESS_RMS_THRESHOLD  # explicit: used
 # The three per-point array fields (same length as x/z per profile), stored padded in `/points`.
 _POINT_ARRAY_FIELDS = ("x", "z", "floorMask")
 # Fixed-length-2 index-pair fields, stored as `[N, 2]` int with -1 = absent (None).
-_INDEX_PAIR_FIELDS = ("peaks", "beadWidthIdx")
+_INDEX_PAIR_FIELDS = ("peaks", "filamentWidthIdx")
 
 
 def _gzip(arr: np.ndarray) -> "str | None":
@@ -26,7 +26,7 @@ def save_profiles(profiles: list[profileData], fileName: str, **file_attrs) -> N
 
     - `/points/x`, `/points/z`, `/points/floorMask` — padded `[N, L]` matrices (L = max point count);
       `/points/lengths` `[N]` gives each profile's valid point count.
-    - `/points/peaks`, `/points/beadWidthIdx` — `[N, 2]` int (`-1` = absent / None).
+    - `/points/peaks`, `/points/filamentWidthIdx` — `[N, 2]` int (`-1` = absent / None).
     - `/scalars/<field>` — one `[N]` float64 per scalar field (NaN = unset).
     - `/names` — `[N]` strings.
 
