@@ -26,7 +26,10 @@ per-segment volume, and segment/defect lengths. (Units: 1 unit ≈ 0.01 mm.)
 3. **Visualise** — lay the profiles out along a computed print path and render them as an
    interactive 3D point cloud (floor vs filament in colour, flat profiles highlighted, width
    markers, baselines), plus a feature heat-map coloured by any per-profile measure with a live
-   feature selector and colour-scale modes (linear / log / clip / rank).
+   feature selector and colour-scale modes (linear / log / clip / rank). Additional 2D matplotlib views
+   compare features — over **time**, and against a **PLC machine input** (a stepwise cell with box/violin
+   per level for setpoint channels like rollerband speed, and a continuous cell with a density cloud +
+   trend + Spearman r for analogue channels like pressures/torque) to spot correlations.
 
 A separate (currently dormant) *registration* path aligns and joins overlapping
 profiles; see [ARCHITECTURE.md](ARCHITECTURE.md).

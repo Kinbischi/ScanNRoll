@@ -57,6 +57,7 @@ Python/
 ├── plcData.py                            # ACTIVE  PLC machine-log CSV load + timestamp join
 ├── profile3Dplotting.py                  # ACTIVE  PyVista 3D plotting + print-path geometry
 ├── featureComparison.py                  # ACTIVE  matplotlib 2D feature-vs-time comparison plot
+├── featurePlcTrends.py                   # ACTIVE  matplotlib 2D feature-vs-PLC correlation plot (two cells: stepwise box/violin, continuous density+trend)
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
 ├── HDf5data/  ProfileData/  Pics/        # data & outputs (git-ignored)
 ├── old/  RandomOther/  testGIthubCircleSquare/  # scratch / experiments (incl. old entry points)

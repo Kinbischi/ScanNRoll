@@ -44,10 +44,11 @@ The system has two halves that meet at an HDF5 file:
 | `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). Imports only `profilePointsClass`. | Active |
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, via `profile_advance_distances`, imported from `profileProcessingAlgorithms`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
 | `featureComparison.py` | `compare_features()` — matplotlib 2D overlay comparing several per-profile features over time, each robustly normalised to 0–1 (percentile-clipped so outliers don't flatten it), with a `CheckButtons` panel to toggle curves. Imports `profilePointsClass` + `FEATURE_DISPLAY`. | Active |
+| `featurePlcTrends.py` | `plot_feature_plc_trends()` — matplotlib 2D feature-vs-PLC-channel correlation plot, one channel family per call via `kind`: `"stepwise"` (discrete channels → box/violin per level) or `"continuous"` (analogue channels → hexbin density + trend); Spearman r; several features → normalised 0–1 trend lines. Live feature toggles, a channel radio, a median/mean statistic radio, and (stepwise) a box/violin shape radio; constant channels force-shown; idle excluded; fixed x-axis. Segment/defect features are aggregated **per run** in the stepwise view (one point per segment/defect) with `n=` counts, a >3-runs box rule, and >0.5 m / cross-level exclusions. Reuses `featureComparison`'s value/scale helpers, `FEATURE_DISPLAY`, and `profileProcessingAlgorithms._contiguous_runs`. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `datasetConfig.py` | The active experiment's file paths (`RAW_FILE`, `PLC_FILE`, derived `PROCESSED_FILE`) in one place, imported by both entry points so they can't drift. Switch datasets by moving the "ACTIVE" pair; others kept commented. | Active |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → join the PLC log by timestamp (trims to the overlap) → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
-| `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: load the processed cache ("after") and reconstruct raw ("before") by inverting the stored leveling transform, then plot flexibly in 3D (PyVista, native window) — raw, processed, and an overlay — plus the 2D feature-comparison view. No processing on this path (uses the cache, not `process_profiles`). | Active |
+| `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: load the processed cache ("after") and reconstruct raw ("before") by inverting the stored leveling transform, then plot flexibly in 3D (PyVista, native window) — raw, processed, and an overlay — plus the 2D feature-vs-time comparison and feature-vs-PLC correlation views. No processing on this path (uses the cache, not `process_profiles`). | Active |
 | `LidarProfileAnalysis_oldRegistration.py` | Previous entry point built around the registration path. | Legacy |
 
 ---
@@ -63,13 +64,16 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
    │    │    └─────── profile3Dplotting      PyVista plotting (imports profilePointsClass + plcData + profileProcessingAlgorithms)
    │    │                   ▲
    │    │                   └── featureComparison   matplotlib 2D feature overlay (imports FEATURE_DISPLAY)
+   │    │                             ▲
+   │    │                             └── featurePlcTrends   matplotlib 2D feature-vs-PLC plot
+   │    │                                 (imports featureComparison helpers + FEATURE_DISPLAY + PLC_COLUMNS)
    │    └──────────── profileProcessingAlgorithms  processing fns + FLATNESS_RMS_THRESHOLD
    │                        ▲
    └── profileLoading ──────┘               HDF5 I/O (also imports FLATNESS_RMS_THRESHOLD)
 
  Entry points compose the above (both also import datasetConfig for the file paths):
-   profileProcessing → profileLoading + profileProcessingAlgorithms + plcData              (process)
-   dataAnalysis      → profileLoading + profile3Dplotting + plcData + featureComparison    (plot)
+   profileProcessing → profileLoading + profileProcessingAlgorithms + plcData                        (process)
+   dataAnalysis      → profileLoading + profile3Dplotting + plcData + featureComparison + featurePlcTrends   (plot)
 
  profileRegistration       LEGACY / dormant — imports profilePointsClass (wildcard), off active path
  rawProfileUdpCapturing    standalone — imports only stdlib + numpy + h5py
@@ -79,10 +83,12 @@ Edges: `profileProcessingAlgorithms`, `profileLoading`, `profile3Dplotting`, and
 import `profilePointsClass`; `profileLoading` also imports `profileProcessingAlgorithms`
 (`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`PLC_COLUMNS`) and
 `profileProcessingAlgorithms` (`profile_advance_distances`); and
-`featureComparison` imports `profilePointsClass` + `profile3Dplotting` (`FEATURE_DISPLAY`). The
-entry points compose these: `profileProcessing` imports `profileLoading` +
-`profileProcessingAlgorithms` + `plcData`; `dataAnalysis` imports `profileLoading` +
-`profile3Dplotting` + `plcData` + `featureComparison`. No cycles.
+`featureComparison` imports `profilePointsClass` + `profile3Dplotting` (`FEATURE_DISPLAY`); and
+`featurePlcTrends` imports `featureComparison` (the `_feature_values`/`_scale_range`/`_normalise`
+helpers) + `profile3Dplotting` (`FEATURE_DISPLAY`) + `plcData` (`PLC_COLUMNS`) + `profilePointsClass`
+(and `scipy.stats.spearmanr`). The entry points compose these: `profileProcessing` imports
+`profileLoading` + `profileProcessingAlgorithms` + `plcData`; `dataAnalysis` imports `profileLoading` +
+`profile3Dplotting` + `plcData` + `featureComparison` + `featurePlcTrends`. No cycles.
 
 - `profilePointsClass` is the foundation; everything depends on it.
 - The active analysis modules now use **explicit** imports; only the dormant
@@ -126,15 +132,16 @@ plotter.show()                           # interactive PyVista window
    lower flanks, then fill small interior gaps.
 4. `flag_flat_profiles` — mark a profile flat when it has **no filament points** (floor only). The
    old line-fit-residual method is kept behind `use_line_fit=True`.
-5. `width_from_smoothed_slope` — filament width between the feet of the two **outermost** filament flanks:
-   smooths z and |dz/dx| internally, finds the outer flank peaks, then walks each flank down to its
-   foot near the floor (so the markers sit at the filament base, not mid-flank).
-6. `width_from_filament_edges` — filament width the other way: the x-span between the outer filament points.
+5. `width_from_smoothed_slope` → `widthFlank` (+ `widthFlankIdx`) — filament width between the feet of
+   the two **outermost** filament flanks: smooths z and |dz/dx| internally, finds the outer flank peaks,
+   then walks each flank down to its foot near the floor (so the markers sit at the filament base).
+6. `width_from_filament_edges` → `widthOuter` (+ `widthOuterIdx`) — filament width the other way: the
+   x-span between the outer filament points.
 7. `measure_filament_height` — robust filament height above the `z = 0` median floor, two ways: the 95th
-   percentile of the filament points' z → `filamentHeight`, and the max of a median-smoothed profile →
-   `filamentHeightSmooth` (both ignore outlier spikes).
+   percentile of the filament points' z → `heightP95`, and the max of a median-smoothed profile →
+   `heightSmooth` (both ignore outlier spikes).
 8. `measure_filament_area` — cross-sectional filament area over the shared `z = 0` median floor, two
-   ways (Simpson integration → `area`, shoelace polygon → `shoelaceArea`) as a mutual cross-check.
+   ways (Simpson integration → `areaSimpson`, shoelace polygon → `areaShoelace`) as a mutual cross-check.
 
 After the geometry pipeline, the entry point runs one more step **outside** `process_profiles`
 (it needs the CSV path, and it changes the profile *set*, not just per-profile fields):
@@ -144,10 +151,17 @@ Windows FILETIME converted to Unix and corrected for the PLC clock offset (`PLC_
 and each profile takes the **nearest-in-time** PLC sample. Profiles outside the two streams'
 mutual time overlap are dropped (a contiguous head/tail trim); the surviving raw index span is
 stored on the cache as `raw_start`/`raw_end` so the plot workbench can load the matching raw slice.
-Then `measure_filament_volume` and `measure_run_lengths` (`profileProcessingAlgorithms`) run — also
-outside `process_profiles`, because they need the physical inter-profile distances
-(`profile_advance_distances`, from `rollerbandSpeed`, populated only by the join).
-`measure_filament_volume` integrates `shoelaceArea` along the print path over each **filament segment**
+Then `clean_flat_runs` (`profileProcessingAlgorithms`) de-noises the segment/defect run structure —
+bridging gaps shorter than `SEGMENT_MERGE_GAP_MM` (5 mm) and dropping segments shorter than
+`MIN_SEGMENT_LENGTH_MM` (10 mm), so a stray flat profile no longer splits a segment and sub-mm blips are
+removed (Exp1: 182 → 120 segments). It writes the cleaned result to a **dedicated `isSegment` flag**
+(starting from `~isFlat`), leaving the raw `isFlat` (= "no filament points", a `floorMask` summary)
+untouched — the two concepts stay separate. It must run here because it, too, needs the physical
+distances. Finally `measure_filament_volume` and `measure_run_lengths` (`profileProcessingAlgorithms`)
+run — also outside `process_profiles`, because they need the physical inter-profile distances
+(`profile_advance_distances`, from `rollerbandSpeed`, populated only by the join) — measuring the cleaned
+runs (segments = runs of `isSegment` via `_segment_mask`).
+`measure_filament_volume` integrates `areaShoelace` along the print path over each **filament segment**
 (a run of non-flat profiles between flat ones), setting `segmentVolume` (the segment total, broadcast
 onto its profiles) and `sliceVolume` (each profile's own `area × gap` slab). `measure_run_lengths` sums
 the advance over each run and broadcasts the total: `segmentLength` (filament-segment length) and
@@ -155,16 +169,19 @@ the advance over each run and broadcasts the total: `segmentLength` (filament-se
 
 The plot workbench (`dataAnalysis.py`) draws floor vs filament in two colours (`category=`), flat
 profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
-(`"baseline"` / `"zeroBaseline"`), and both width methods' points (`"widthPoints"` /
-`"filamentWidthPoints"`). It can also colour the filament by a per-profile feature with a live
-selector panel (`plot_feature_heatmap`): all features are attached to the cloud as separate
-scalar arrays, so clicking a feature button only repoints the mapper and rescales the colour bar.
-Selectable features include the geometry measures (width / height / area, grouped and shown in
-mm / mm²), the two filament-segment volumes (`segmentVolume` / `sliceVolume`, each its own colour
-group, in cm³), the run lengths (`segmentLength` in mm; `defectLength` in mm via the `category="floor"`
-view, since a pure-floor gap has no filament points to colour) and each joined PLC channel (its own
-colour range, in the PLC's native units) — set by `FEATURE_DISPLAY` in `profile3Dplotting.py`. A
-bottom-right radio group switches the colour scale (linear / log / clip / rank) live.
+(`"baseline"` / `"zeroBaseline"`), and both width methods' points (`"widthFlankPoints"` /
+`"widthOuterPoints"`). It can also colour the cloud by a per-profile feature with a live selector
+panel (`plot_feature_heatmap`; the feature buttons are grouped under Geometry / Segment / PLC headers).
+Because features live on different point sets, the heat-map **prebuilds one cloud per point set**
+(`_feature_pointset`): filament geometry + PLC channels colour the **filament**
+points, while `defectLength` and the `isSegment` / `isNotFlat` flags (which sit on floor/gap profiles)
+colour **all** points. Switching within a point set only repoints the mapper (instant); crossing point
+sets swaps which cloud is drawn (filament-only ↔ all) while keeping the camera, and a single shared
+colour bar is re-tied to the active cloud. Selectable features include the geometry measures (width /
+height / area, grouped and shown in mm / mm²), the two filament-segment volumes (`segmentVolume` /
+`sliceVolume`, in cm³), the run lengths (`segmentLength` / `defectLength` in mm), the 0/1 segment flags,
+and each joined PLC channel — set by `FEATURE_DISPLAY` in `profile3Dplotting.py`. A bottom-right radio
+group switches the colour scale (linear / log / clip / rank) live.
 
 For comparing features against each other (rather than one at a time in space),
 `featureComparison.compare_features` (matplotlib) overlays several as time series on one axis,
@@ -173,6 +190,30 @@ legend shows both the scale range that maps to 0–1 and the true min–max (rev
 outliers). Left-panel checkboxes toggle each curve ("show") and moving-average-smooth selected
 curves ("smooth", with a window slider); the legend keeps every feature's colour and bolds the
 shown ones. New `dataAnalysis.py` cell.
+
+For checking whether a feature **correlates with a machine input**, `featurePlcTrends.plot_feature_plc_trends`
+(matplotlib) puts a PLC channel on x and per-profile feature(s) on y. It is built for one channel family
+at a time via the `kind` argument, so `dataAnalysis.py` opens it as **two cells**: `kind="stepwise"` for
+the discrete/setpoint channels (`STEPWISE_CHANNELS`: `rollerbandSpeed`, `printHeadMixxingSpeed`, the two
+viscotec pumps) aggregated **per level**, and `kind="continuous"` for the analogue signals
+(`CONTINUOUS_CHANNELS`: pressures, torque) drawn as a density cloud (`mortarPumpFlow`/`rollerbandHeight`
+are omitted). One feature shown → the rich single-feature view in real units (a **box or violin** per
+level — a box/violin shape radio — or a hexbin density + central-per-quantile-bin trend + spread band)
+with a Spearman r; two or more → each collapses to one normalised-0–1 central±band trend line on a shared
+axis, with each feature's Spearman r in the legend (several boxes/densities can't overlay legibly). A
+median/mean radio switches the central statistic everywhere (median+IQR ↔ mean+std) and, in the single
+stepwise view, moves the central line on the box/violin. Live `CheckButtons` toggle the features and a
+`RadioButtons` list picks the x-channel; **constant channels are force-shown** (the viscotec pumps read 0
+in the current cache; their Spearman shows `n/a`). Selectable features are the per-profile geometry
+measures plus the broadcast segment/defect aggregates (`segmentVolume`/`segmentLength`/`defectLength`).
+In the stepwise view those **run features** are aggregated **per run** — one datapoint per segment/defect
+(detected with `profileProcessingAlgorithms._contiguous_runs` on the full profile list, since decimation
+would break run contiguity), not per profile — and each level shows an **`n=` count**, draws its
+box/violin only where there are **> 3** runs, and **excludes** runs longer than **0.5 m** or that span
+more than one level of the active channel (so it generalises to the viscotec channels in future datasets).
+The stepwise **x-axis is fixed** to the channel's full level set. Idle profiles (`rollerbandSpeed == 0`)
+are excluded so trends reflect actual printing. It reuses `featureComparison`'s value/scale helpers and
+`FEATURE_DISPLAY`. Two `dataAnalysis.py` cells (need a GUI backend, like `compare_features`).
 
 Key detail: `width_from_smoothed_slope` cascades box filters (`moving_average`) over `z` (locally —
 no stored arrays), takes the gradient and smooths it again, runs `scipy.signal.find_peaks` on that
@@ -240,16 +281,17 @@ reads instead of ~N tiny per-group reads (measured **~142 s → ~5 s** on the 90
 
 - **`/points`** (per-point arrays, padded): `x`, `z` (rotated + levelled coordinates) and `floorMask`
   (per-point floor/filament split) as `[N, L]` matrices (L = max point count), with `lengths` `[N]`
-  giving each profile's valid point count; plus `peaks` (the two width-edge / flank-foot indices) and
-  `filamentWidthIdx` (the two outer filament-point indices) as `[N, 2]` int (`-1` = absent / None).
+  giving each profile's valid point count; plus `widthFlankIdx` (the two flank-foot indices) and
+  `widthOuterIdx` (the two outer filament-point indices) as `[N, 2]` int (`-1` = absent / None).
 - **`/scalars`** — every per-profile *scalar* field as a length-N `float64` dataset (NaN = unset):
-  `m`/`b` (floor fit), `width` (smoothed-slope flank-foot method, NaN when < 2 flanks), `filamentWidth`
-  (filament-edge method), `filamentHeight` / `filamentHeightSmooth` (robust filament heights, percentile vs
-  median-smoothed; NaN when flat), `area` / `shoelaceArea` (filament cross-section, integration vs
+  `m`/`b` (floor fit), `widthFlank` (smoothed-slope flank-foot method, NaN when < 2 flanks), `widthOuter`
+  (filament-edge method), `heightP95` / `heightSmooth` (robust filament heights, percentile vs
+  median-smoothed; NaN when flat), `areaSimpson` / `areaShoelace` (filament cross-section, integration vs
   shoelace; NaN when flat), `segmentVolume` / `sliceVolume` (filament-segment total vs per-profile slab
   volume; unset for flat profiles), `segmentLength` (filament-run length; unset on flat) / `defectLength`
-  (pure-floor-run length; unset on non-flat), `isFlat`, `flatness` (line-fit RMS residual; unset for the default
-  floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor clock
+  (pure-floor-run length; unset on non-flat), `isFlat` (raw "no filament points"), `isSegment` (cleaned
+  "part of a real filament segment", from `clean_flat_runs`), `flatness` (line-fit RMS residual; unset for
+  the default floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor clock
   seconds, for inter-profile dt), and the 10 joined PLC channels (`mortarPumpFlow`, `pressure*`,
   `printHead*`, `rollerband*`, `viscoPump*`).
 - **`/names`** — `[N]` strings.

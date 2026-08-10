@@ -4,11 +4,20 @@ import pyvista as pv
 import profile3Dplotting
 from datasetConfig import PROCESSED_FILE
 from featureComparison import compare_features
+from featurePlcTrends import plot_feature_plc_trends
 from plcData import PLC_COLUMNS
 from profileLoading import load_profiles, read_file_attrs
 from profileProcessingAlgorithms import unlevel_profiles
 
 pv.global_theme.notebook = False  # show() pops the native interactive window (not a static inline image)
+
+# Use an interactive matplotlib backend so the 2D plot widgets (checkboxes / radios in
+# compare_features and plot_feature_plc_trends) work — otherwise VS Code cells render a static image.
+# Harmless when run as a plain script (no IPython -> the magic is skipped).
+try:
+    get_ipython().run_line_magic("matplotlib", "qt")  # type: ignore[name-defined]
+except (NameError, AttributeError):
+    pass
 
 PROFILE_STEP = 3   # draw every Nth profile  (3D subsampling; points ~ total / (PROFILE_STEP * POINT_STEP))
 POINT_STEP = 2     # draw every Nth point
@@ -39,33 +48,40 @@ pl.show()
 # %% 3D width markers — slope-peak (red) vs filament-edge (blue)   (needs a reprocessed cache)
 pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
 pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
-pl.plot(processed, "widthPoints", "red", size=15, spheres=True)
-pl.plot(processed, "filamentWidthPoints", "blue", size=15, spheres=True)
+pl.plot(processed, "widthFlankPoints", "red", size=15, spheres=True)
+pl.plot(processed, "widthOuterPoints", "blue", size=15, spheres=True)
 pl.show()
 
 
-# %% 3D heat-map — colour filament by a feature; live feature + scale-mode buttons   (needs a reprocessed cache)
-GEOMETRY_FEATURES = ("width", "filamentWidth", "filamentHeight", "filamentHeightSmooth", "area", "shoelaceArea",
-                     "segmentVolume", "sliceVolume", "segmentLength")
+# %% 3D heat-map — one plot for ALL features; auto-switches filament-only ↔ all points per feature   (needs a reprocessed cache)
+# geometry + PLC colour the filament points; defectLength + the isSegment/isNotFlat flags colour all points.
+HEATMAP_FEATURES = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace",
+                    "segmentVolume", "sliceVolume", "segmentLength", "defectLength", "isSegment", "isNotFlat")
 pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
-pl.plot_feature_heatmap(processed, features=GEOMETRY_FEATURES + PLC_COLUMNS,
-                        initial="filamentWidth", profile_step=PROFILE_STEP, point_step=POINT_STEP)
-pl.show()
-
-
-# %% 3D defect length — colour pure-floor gaps by their length (floor points)   (needs a reprocessed cache)
-pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
-pl.plot_feature_heatmap(processed, features=("defectLength",), initial="defectLength",
-                        category="floor", profile_step=PROFILE_STEP, point_step=POINT_STEP)
+pl.plot_feature_heatmap(processed, features=HEATMAP_FEATURES + PLC_COLUMNS,
+                        initial="widthOuter", profile_step=PROFILE_STEP, point_step=POINT_STEP)
 pl.show()
 
 
 # %% 2D feature-vs-time — normalized overlay; toggle/smooth curves   (needs a GUI backend)
 compare_features(processed,
-                 features=("printHeadTorque", "width", "filamentHeight", "area",
+                 features=("printHeadTorque", "widthFlank", "heightP95", "areaSimpson",
                            "viscoPump1_VMAflow", "mortarPumpFlow", "pressurePipeStart", "rollerbandSpeed"),
-                 initial=("printHeadTorque", "width", "viscoPump1_VMAflow"),
+                 initial=("printHeadTorque", "widthFlank", "viscoPump1_VMAflow"),
                  time_unit="min", profile_step=5)
+
+
+PLC_FEATURES = ("widthFlank", "heightP95", "areaSimpson", "areaShoelace", "sliceVolume",
+                "segmentVolume", "segmentLength", "defectLength")
+
+# %% 2D feature-vs-PLC (stepwise) — box/violin per level; toggle features, pick channel, median/mean   (needs a GUI backend)
+plot_feature_plc_trends(processed, kind="stepwise", features=PLC_FEATURES,
+                        initial_feature="widthFlank", initial_channel="rollerbandSpeed", profile_step=5)
+
+
+# %% 2D feature-vs-PLC (continuous) — hexbin density + trend + Spearman; toggle features, pick channel   (needs a GUI backend)
+plot_feature_plc_trends(processed, kind="continuous", features=PLC_FEATURES,
+                        initial_feature="widthFlank", initial_channel="pressurePrintHead", profile_step=5)
 
 
 # %% [TUNING — safe to delete] dial the floor/filament split live (shallow copies; pipeline untouched)

@@ -29,6 +29,17 @@ This project does not yet use formal version numbers; changes accumulate under
   index would overflow int64). Cuts the overlay cell's two voxel passes from ~13 s to ~2.5 s.
 
 ### Changed
+- **Renamed the method-ambiguous geometry fields to `<measure><Method>`** so a name says how it was
+  computed: `width`→`widthFlank` (smoothed-slope flank feet) + `peaks`→`widthFlankIdx`;
+  `filamentWidth`→`widthOuter` (outer filament points) + `filamentWidthIdx`→`widthOuterIdx`;
+  `filamentHeight`→`heightP95`, `filamentHeightSmooth`→`heightSmooth`; `area`→`areaSimpson` (Simpson
+  integration), `shoelaceArea`→`areaShoelace`. Also renames the 3D width-marker subjects
+  (`"widthPoints"`→`"widthFlankPoints"`, `"filamentWidthPoints"`→`"widthOuterPoints"`) and updates
+  `FEATURE_DISPLAY`, the feature lists, and `_INDEX_PAIR_FIELDS`; the `FEATURE_DISPLAY` colour-group
+  names (`width`/`height`/`area`) are kept and now also serve as the selector's measure labels. The
+  heat-map feature buttons now show `measure  [method] [method]` (e.g. `area  [simpson] [shoelace]`),
+  which also fixes the paired-button label overlap. **Reprocess (`python profileProcessing.py`)** — the
+  cache scalar/index datasets are keyed by field name, so pre-rename caches load these fields as unset.
 - **Renamed the deposited-material term `bead` → `filament`** throughout the active code and docs, to
   match the concrete-3D-printing domain. This renames the four `profileData` fields
   `beadWidth`/`beadHeight`/`beadHeightSmooth`/`beadWidthIdx` → `filamentWidth`/`filamentHeight`/
@@ -83,6 +94,68 @@ This project does not yet use formal version numbers; changes accumulate under
   they were never persisted (`_TRANSIENT_FIELDS` is now empty). Old caches still load.
 
 ### Added
+- **Unified 3D heat-map with automatic point-set switching.** `plot_feature_heatmap` now **prebuilds one
+  point cloud per point set** (`_build_one_cloud`) and swaps the visible one when the active feature
+  changes (`_feature_pointset` / `_ALL_POINT_FEATURES`): filament geometry + PLC channels colour the
+  **filament** points, while `defectLength` and the `isSegment` / `isNotFlat` flags (which live on
+  floor/gap profiles) colour **all** points. Switching within a point set is instant (repoint the
+  mapper); crossing point sets swaps which cloud is drawn (filament-only ↔ all) while keeping the camera,
+  with a single shared colour bar re-tied to the active cloud (`add_scalar_bar(mapper=…)`). The three
+  separate heat-map cells (main / defect / flags) collapse into **one** `dataAnalysis.py` cell listing
+  every feature; the per-call `category` argument is gone. The **feature buttons are grouped** in a
+  single left column under shadowed category headers — Geometry / Segment / PLC (/ Other), via
+  `_SELECTOR_CATEGORIES` — and **paired measures** (the two features sharing a FEATURE_DISPLAY colour
+  group, e.g. `area` + `shoelaceArea`) sit **side by side on one row** to save height; the default 3D
+  window is enlarged so the panel fits. `profile3Dplotting.py` only; no cache change.
+- **Cleaned segment structure in a dedicated `isSegment` flag (was overloaded onto `isFlat`).** New
+  per-profile `profileData.isSegment` (cached) holds the morphologically-cleaned "part of a real filament
+  segment" result, so `isFlat` stays a faithful raw floorMask summary (`isFlat == floorMask.all()`) and
+  the two concepts are separate. `clean_flat_runs` now writes `isSegment` (starting from `~isFlat`),
+  leaving `isFlat` untouched; `measure_run_lengths`, `measure_filament_volume`, and `featurePlcTrends`'
+  run table key off the new `_segment_mask` (the cleaned `isSegment`). The 3D flat/gap highlight
+  (`plot()`'s `flat_colour` / `get_profile_points_for_plot(want_flat)`)
+  now marks gaps by `~isSegment`. **View the flags in the heat map**: `isSegment` and `isNotFlat` (a
+  derived property = inverse of `isFlat`, so both read 1 = filament and share the colour) are 0/1
+  heat-map features (share a 0-1 colour group), shown over **all** points in the unified heat-map (see
+  above) so bridged floor-only gaps are visible and the cleanup is inspectable. **Reprocess to populate
+  `isSegment`.**
+- **Morphological cleanup of the filament run structure (`clean_flat_runs`).** New step in
+  `profileProcessingAlgorithms.py`, run in `profileProcessing.main()` after the PLC join and **before**
+  `measure_filament_volume` / `measure_run_lengths`, that de-noises the segment/defect runs the
+  categorisation produces: it **bridges** gaps shorter than `SEGMENT_MERGE_GAP_MM = 5 mm` (flanked by
+  segment — a single stray flat profile no longer splits a segment) and then **drops** segments shorter
+  than `MIN_SEGMENT_LENGTH_MM = 10 mm` (isolated non-flat blips). Bridging first, so a real segment split
+  by a tiny gap is rejoined before the length test. Result stored in `isSegment` (see above); `floorMask`
+  and the per-profile geometry are unchanged. Effect on Exp1: **182 → 120 filament segments**, and the
+  per-speed counts match a visual count (e.g. rollerbandSpeed 0.16: 52 → 27, 0.14: 29 → 18). **Reprocess
+  (`python profileProcessing.py`) to apply** — `isSegment`/`segmentVolume`/`sliceVolume`/`segmentLength`/
+  `defectLength` in the cache change. Uses physical distances (`profile_advance_distances`), so it must
+  run post-join.
+- **Feature-vs-PLC correlation plot (`featurePlcTrends.plot_feature_plc_trends`).** New matplotlib
+  module putting a PLC channel on x and per-profile feature(s) on y, to see whether a geometry feature
+  tracks a machine input. Built for one channel family at a time via a `kind` argument, so it opens as
+  **two `dataAnalysis.py` cells**: `kind="stepwise"` for the discrete/setpoint channels
+  (`STEPWISE_CHANNELS` = `rollerbandSpeed`, `printHeadMixxingSpeed`, the two viscotec pumps) and
+  `kind="continuous"` for the analogue signals (`CONTINUOUS_CHANNELS` = `pressurePrintHead`,
+  `printHeadTorque`, `pressurePipeEnd`, `pressurePipeStart`); `mortarPumpFlow` and `rollerbandHeight`
+  are omitted. One feature shown → the rich single-feature view in real units — a **box or violin** per
+  level (stepwise; a **box/violin shape radio**) or a **hexbin density + central-per-quantile-bin trend
+  + spread band** (continuous) — with a **Spearman r**; two or more → each collapses to one **normalised
+  0–1** central±band trend line, with each feature's r in the legend. A **median/mean radio** switches
+  the central statistic everywhere (median+IQR ↔ mean+std) and, in the single stepwise view, moves the
+  central line on the box/violin. Live `CheckButtons` toggle features and a `RadioButtons` list picks
+  the x-channel; **constant channels are force-shown** (the viscotec pumps read 0 in the current cache),
+  and a constant channel's Spearman shows `n/a`. Offered features are the per-profile geometry measures
+  plus the broadcast segment/defect aggregates (`segmentVolume`/`segmentLength`/`defectLength`). In the
+  **stepwise** view these `RUN_FEATURES` are aggregated **per run** (one datapoint per segment/defect,
+  via `_contiguous_runs` on the full profile list), not per profile — fixing the profile-count weighting
+  — with, per level: an **`n=<count>` annotation** above every level, the box/violin drawn only where a
+  level has **> 3** runs (`MIN_RUNS_FOR_BOX`) else the count alone, and runs **excluded** when longer
+  than **0.5 m** (`MAX_RUN_LENGTH_MM`) or when they **span more than one level** of the active channel.
+  The stepwise **x-axis is fixed** to the channel's full level set (stable across feature switches /
+  empty levels). Idle profiles (`rollerbandSpeed == 0`) are excluded. Reuses `featureComparison`'s
+  `_feature_values`/`_scale_range`/`_normalise` and `FEATURE_DISPLAY` (Spearman via `scipy.stats`, guarded
+  for constant inputs). Needs a GUI backend (like `compare_features`). No pipeline/cache change.
 - **Filament-segment length + pure-floor defect length (mm heat-map features).** New
   `measure_run_lengths()` in `profileProcessingAlgorithms.py` sums the along-path advance
   (`profile_advance_distances`) over each maximal run of like profiles and broadcasts the total onto
