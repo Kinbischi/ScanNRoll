@@ -4,18 +4,18 @@ import numpy as np
 import pyvista as pv
 from plcData import PLC_COLUMNS
 from profilePointsClass import profileData
-from profileProcessingAlgorithms import profile_advance_distances
+from profileProcessingAlgorithms import _is_segment, profile_advance_distances
 
 # Heat-map feature display: feature -> (group, unit factor, unit label). 1 profile unit = 0.01 mm,
 # so lengths scale to mm and areas to mm^2. Features sharing a group share one colour range (clim),
 # so paired measures are directly comparable; grouping also sets the button order.
 FEATURE_DISPLAY = {
-    "width":            ("width",  0.01, "mm"),
-    "filamentWidth":        ("width",  0.01, "mm"),
-    "filamentHeight":       ("height", 0.01, "mm"),
-    "filamentHeightSmooth": ("height", 0.01, "mm"),
-    "area":             ("area",   1e-4, "mm^2"),
-    "shoelaceArea":     ("area",   1e-4, "mm^2"),
+    "widthFlank":       ("width",  0.01, "mm"),
+    "widthOuter":       ("width",  0.01, "mm"),
+    "heightP95":       ("height", 0.01, "mm"),
+    "heightSmooth": ("height", 0.01, "mm"),
+    "areaSimpson":      ("area",   1e-4, "mm^2"),
+    "areaShoelace":     ("area",   1e-4, "mm^2"),
     # Volumes: area-unit * distance-unit -> cm^3 (1e-4 mm^2 * 0.01 mm = 1e-6 mm^3 = 1e-9 cm^3). Each
     # its own colour group: a segment total is ~10^2-10^3x a single slice, so they must not share a clim.
     "segmentVolume":    ("segmentVolume", 1e-9, "cm^3"),
@@ -25,6 +25,12 @@ FEATURE_DISPLAY = {
     # shows in a floor-category heat-map (`plot_feature_heatmap(..., category="floor")`).
     "segmentLength":    ("segmentLength", 0.01, "mm"),
     "defectLength":     ("defectLength",  0.01, "mm"),
+    # Per-profile 0/1 flags (share one 0-1 colour group; 1 = filament/segment -> same high colour):
+    # `isSegment` = part of a cleaned filament segment (clean_flat_runs), `isNotFlat` = raw "has filament
+    # points" (inverse of isFlat). View over ALL points (`plot_feature_heatmap(..., category=None)`) so
+    # bridged floor-only gaps are visible.
+    "isSegment":        ("segFlag", 1.0, ""),
+    "isNotFlat":        ("segFlag", 1.0, ""),
     # PLC machine-log channels (joined by timestamp): each its own colour group, since their
     # magnitudes differ widely. Shown in the PLC's native engineering units (factor 1.0; the
     # unit label is left blank as the physical units aren't recorded in the CSV).
@@ -37,6 +43,39 @@ FEATURE_DISPLAY = {
 _SCALE_MODES = ("linear", "log", "clip", "rank")
 CLIP_PERCENTILES = (2.0, 98.0)  # "clip" mode maps this percentile range to the colormap (outliers saturate)
 _RANK_SUFFIX = "__rank"          # per-feature companion array holding the [0, 1] dense rank (rank mode)
+
+# Heat-map point set per feature: the unified heat-map prebuilds one cloud per distinct point set and
+# swaps the visible one when the active feature changes. These features live on floor/gap profiles (no
+# filament points) so they are coloured over ALL points; every other feature colours the filament points.
+_ALL_POINT_FEATURES = frozenset({"isSegment", "isNotFlat", "defectLength"})
+
+
+def _feature_pointset(feature: str) -> "str | None":
+    """Which points a feature is coloured on: None = all points, "profile" = filament points."""
+    return None if feature in _ALL_POINT_FEATURES else "profile"
+
+
+# For the selector: a paired row shows the measure name once + a short per-method button label.
+_GROUP_DISPLAY = {"segFlag": "flags"}  # measure label of a paired row (else the FEATURE_DISPLAY group name)
+
+
+def _method_label(feature: str) -> str:
+    """Short button label for a paired feature: the method suffix after its colour-group name
+    (widthFlank -> 'flank', areaSimpson -> 'simpson'), or the full name when it has no such prefix."""
+    group = FEATURE_DISPLAY[feature][0]
+    if feature.lower().startswith(group.lower()) and len(feature) > len(group):
+        suffix = feature[len(group):]
+        return suffix[0].lower() + suffix[1:]
+    return feature
+
+
+# Feature-selector button-panel categories (grouping + headers only; independent of the FEATURE_DISPLAY
+# colour groups and the point-set groups above). Features not in any list fall under "Other".
+_SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Geometry", ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace", "sliceVolume")),
+    ("Segment", ("segmentVolume", "segmentLength", "defectLength", "isSegment", "isNotFlat")),
+    ("PLC", PLC_COLUMNS),
+)
 
 
 class plottingClass:
@@ -52,7 +91,7 @@ class plottingClass:
         is not a uniform on-screen spacing: steep features (filament flanks) keep points stacked
         ~`voxel_size` apart in height. Off ⇒ renders identically to before.
         """
-        self.plotter = pv.Plotter()
+        self.plotter = pv.Plotter(window_size=[1280, 860])  # roomy default so the tall left feature panel fits
         self._voxel_size = voxel_size
 
         distances = profile_advance_distances(profiles)
@@ -95,8 +134,8 @@ class plottingClass:
              profile_step: int = 1, point_step: int = 1, flat_colour: str | None = None,
              category: str | None = None, spheres: bool = False) -> None:
         """Add one subject to the 3D scene: "profile", "baseline", "zeroBaseline",
-        "widthPoints" (slope-peak method, uses `peaks`), or "filamentWidthPoints" (outer-filament-point
-        method, uses `filamentWidthIdx`).
+        "widthFlankPoints" (slope-peak method, uses `widthFlankIdx`), or "widthOuterPoints" (outer-filament-
+        point method, uses `widthOuterIdx`).
 
         profile_step / point_step subsample the dense "profile" cloud so interaction
         stays responsive on very large datasets: plot every profile_step-th profile and
@@ -104,8 +143,9 @@ class plottingClass:
         "profile". size / spheres set point size and sphere rendering for the point subjects
         (enlarge + spheres=True on the width markers so the chosen points stand out).
 
-        flat_colour (profiles only): if set, profiles flagged `isFlat` are drawn in this
-        colour and the rest in `colour`; if None, every profile uses `colour`.
+        flat_colour (profiles only): if set, gap profiles (not in a cleaned filament segment,
+        `~isSegment`) are drawn in this colour and the rest in
+        `colour`; if None, every profile uses `colour`.
 
         category (profiles only): "floor" or "profile" draws only points of that category
         (uses `floorMask`); None draws all points. Call twice with different category +
@@ -126,12 +166,12 @@ class plottingClass:
             case "zeroBaseline":
                 # flat z = 0 reference on each profile (the uniform leveling target)
                 self.add_lines_to_plot(line_points_from_zero(profiles), colour)
-            case "widthPoints":
-                # slope-peak width method: mark the two peak points (from `peaks`)
-                self.add_3d_points_to_plot(width_point_arrays(profiles, "peaks"), colour, size, spheres=spheres)
-            case "filamentWidthPoints":
-                # filament-edge width method: mark the two outer filament points (from `filamentWidthIdx`)
-                self.add_3d_points_to_plot(width_point_arrays(profiles, "filamentWidthIdx"), colour, size, spheres=spheres)
+            case "widthFlankPoints":
+                # slope-peak width method: mark the two flank-foot points (from `widthFlankIdx`)
+                self.add_3d_points_to_plot(width_point_arrays(profiles, "widthFlankIdx"), colour, size, spheres=spheres)
+            case "widthOuterPoints":
+                # filament-edge width method: mark the two outer filament points (from `widthOuterIdx`)
+                self.add_3d_points_to_plot(width_point_arrays(profiles, "widthOuterIdx"), colour, size, spheres=spheres)
 
     def add_3d_points_to_plot(self,points, colour = 'green', point_size=5, spheres=False):
         # Collect every profile's transformed points and add them as a single actor, placed along the
@@ -166,44 +206,76 @@ class plottingClass:
             self.plotter.add_mesh(lines, color = colour, line_width=5)
 
     def plot_feature_heatmap(self, profiles: list[profileData],
-                             features: tuple[str, ...] = ("width", "filamentWidth", "filamentHeight", "filamentHeightSmooth", "area", "shoelaceArea"),
-                             initial: str = "filamentWidth", cmap: str = "viridis",
-                             point_size: int = 6, profile_step: int = 1, point_step: int = 1,
-                             category: str = "profile") -> None:
-        """Colour a per-point cloud by a per-profile scalar feature, with a clickable button panel
-        to switch the active feature live.
+                             features: tuple[str, ...] = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace"),
+                             initial: str = "widthOuter", cmap: str = "viridis",
+                             point_size: int = 6, profile_step: int = 1, point_step: int = 1) -> None:
+        """Colour the cloud by a per-profile scalar feature, with a clickable button panel to switch the
+        active feature live.
 
-        Each feature in `features` is attached to the cloud as its own point-data array (each
-        profile's scalar broadcast to its points, converted to physical units per FEATURE_DISPLAY),
-        so switching only repoints the mapper and rescales the colour bar — no recompute. Features in
-        the same group (width / height / area) share one colour range so the paired measures are
-        directly comparable, and the colour bar is labelled in mm / mm^2. A second radio group at the
-        bottom-right sets the colour-scale mode of the active feature live — linear (full min-max,
-        default), log, clip (2-98 pct, so an outlier doesn't squash the rest), rank (dense rank 0-1) —
-        see `_apply_scale`. `category` picks which points to colour: "profile" (filament points, the
-        default — flat profiles drop out) or "floor" (substrate points — needed for `defectLength`,
-        which lives on pure-floor profiles). NaN feature values render in the NaN colour. Interactive-
-        window only (buttons need a live VTK interactor).
+        Each feature's scalar is broadcast to its points (converted to physical units per
+        FEATURE_DISPLAY). Features in the same group (width / height / area) share one colour range so
+        the paired measures are directly comparable, and the colour bar is labelled in mm / mm^2. A radio
+        group at the bottom-right sets the colour-scale mode of the active feature live — linear (full
+        min-max, default), log, clip (2-98 pct, so an outlier doesn't squash the rest), rank (dense rank
+        0-1) — see `_apply_scale`.
+
+        Features live on different point sets, so the heat-map **prebuilds one cloud per point set** and
+        swaps the visible one when the active feature changes (see `_feature_pointset`): filament
+        geometry + PLC channels colour the **filament** points, while the `isSegment` / `isNotFlat` flags
+        and `defectLength` (which live on floor/gap profiles) colour **all** points. Switching within a
+        point set only repoints the mapper (instant); switching across point sets swaps which cloud is
+        drawn, so the displayed points change (filament-only ↔ all) while the camera is kept. NaN feature
+        values render in the NaN colour. Interactive-window only (buttons need a live VTK interactor).
         """
-        self._build_feature_cloud(profiles, features, initial, cmap, point_size,
-                                  profile_step, point_step, category)
+        self._build_feature_cloud(profiles, features, initial, cmap, point_size, profile_step, point_step)
         self._add_feature_selector()
         self._add_scale_selector()
 
     def _build_feature_cloud(self, profiles: list[profileData], features: tuple[str, ...],
                              initial: str, cmap: str, point_size: int,
-                             profile_step: int, point_step: int, category: str = "profile") -> None:
-        """Build and add the point cloud carrying one scalar array per feature, and store the
-        state the selector callback mutates. `category` ("profile" filament points / "floor" substrate
-        points) selects which points to draw. Separated from the widget wiring so it can be
-        exercised without a live interactor (headless tests)."""
+                             profile_step: int, point_step: int) -> None:
+        """Prebuild one point cloud per distinct point set among `features` (see `_feature_pointset`),
+        each carrying its features' scalar + rank arrays and a hidden actor, and store the state the
+        selector callbacks mutate. Only the active feature's cloud is shown (via `_apply_scale`).
+        Separated from the widget wiring so it can be exercised headless."""
         if initial not in features:
             raise ValueError(f"initial feature {initial!r} not in {features}")
-        per_profile = get_profile_points_for_plot(profiles, profile_step, point_step, category=category)
+        self._feature_names = list(features)
+        self._feature_initial = initial
+        self._active_feature = initial
+        self._scale_mode = "linear"
+        self._feature_pointset = {f: _feature_pointset(f) for f in features}
+        self._feature_unit = {f: FEATURE_DISPLAY[f][2] for f in features}
+        self._clouds: dict = {}
+        self._mappers: dict = {}
+        self._actors: dict = {}
+        self._feature_scale_clim: dict = {}
+        self._scalar_bar_ps = "<none>"  # which point set the single scalar bar is currently tied to
+
+        by_pointset: dict = {}
+        for f in features:
+            by_pointset.setdefault(self._feature_pointset[f], []).append(f)
+        for pointset, feats in by_pointset.items():
+            built = self._build_one_cloud(profiles, feats, cmap, point_size, profile_step, point_step, pointset)
+            if built is not None:
+                self._clouds[pointset], self._mappers[pointset], self._actors[pointset], scale_clim = built
+                self._feature_scale_clim.update(scale_clim)
+        if not self._clouds:
+            return  # nothing to draw (e.g. every profile flat)
+        if self._feature_pointset[initial] not in self._clouds:  # initial's cloud is empty -> pick a built one
+            self._active_feature = next(f for f in features if self._feature_pointset[f] in self._clouds)
+        self._apply_scale(self._active_feature, "linear")
+
+    def _build_one_cloud(self, profiles: list[profileData], features: list[str], cmap: str,
+                         point_size: int, profile_step: int, point_step: int, pointset: str | None):
+        """Build one cloud for `features` on `pointset` (category for get_profile_points_for_plot): attach
+        each feature's scalar + rank array, voxel-downsample, add a hidden points actor. Returns
+        (cloud, mapper, actor, {feature: {mode: clim}}), or None if the point set has no points."""
+        per_profile = get_profile_points_for_plot(profiles, profile_step, point_step, category=pointset)
         transformed = []
         columns: dict[str, list[np.ndarray]] = {f: [] for f in features}
         for i, prof_pts in enumerate(per_profile):
-            if prof_pts.shape[0] == 0:  # skipped, empty, or flat (no filament points)
+            if prof_pts.shape[0] == 0:  # skipped, empty, or no points of this category
                 continue
             transformed.append(self.pathPoints[i] + prof_pts @ self.rotation_matrices[i].T)
             for f in features:
@@ -211,20 +283,16 @@ class plottingClass:
                 factor = FEATURE_DISPLAY[f][1]  # profile units -> physical (mm / mm^2)
                 columns[f].append(np.full(prof_pts.shape[0], np.nan if val is None else float(val) * factor))
         if not transformed:
-            return  # nothing to draw (e.g. every profile flat)
+            return None
 
         cloud = pv.PolyData(np.vstack(transformed))
         for f in features:
             cloud[f] = np.concatenate(columns[f])
-        # Downsample before clim/store so the reduced cloud is what's coloured and live-switched;
-        # extract_points carries the per-feature scalar arrays along.
-        cloud = self._maybe_voxel(cloud)
-        # Rank companion array per feature (for the "rank" scale mode), on the displayed values.
+        cloud = self._maybe_voxel(cloud)  # downsample before clim/store so the reduced cloud is coloured
         for f in features:
             cloud[f + _RANK_SUFFIX] = _rank01(np.asarray(cloud[f]))
-        cloud.set_active_scalars(initial)
 
-        # features in the same group share one colour range, computed over the whole group's values
+        # features in the same group share one colour range, over the group's values (all in this cloud)
         groups: dict[str, list[str]] = {}
         for f in features:
             groups.setdefault(FEATURE_DISPLAY[f][0], []).append(f)
@@ -232,28 +300,17 @@ class plottingClass:
         group_linear = {g: _finite_clim(v) for g, v in group_vals.items()}
         group_log = {g: _positive_clim(v) for g, v in group_vals.items()}
         group_clip = {g: _percentile_clim(v, CLIP_PERCENTILES) for g, v in group_vals.items()}
-
-        self._feature_names = list(features)
-        self._feature_initial = initial
-        self._active_feature = initial
-        self._scale_mode = "linear"
-        self._feature_clim = {f: group_linear[FEATURE_DISPLAY[f][0]] for f in features}
-        # per feature, the clim for each scale mode (rank is always [0, 1]); None = mode unavailable
-        self._feature_scale_clim = {
-            f: {"linear": group_linear[g], "log": group_log[g],
-                "clip": group_clip[g], "rank": [0.0, 1.0]}
+        scale_clim = {
+            f: {"linear": group_linear[g], "log": group_log[g], "clip": group_clip[g], "rank": [0.0, 1.0]}
             for f, g in ((f, FEATURE_DISPLAY[f][0]) for f in features)
         }
-        self._feature_unit = {f: FEATURE_DISPLAY[f][2] for f in features}
-        self._feature_cloud = cloud
         actor = self.plotter.add_points(
-            cloud, scalars=initial, cmap=cmap, clim=self._feature_clim[initial],
+            cloud, scalars=features[0], cmap=cmap, clim=scale_clim[features[0]]["linear"],
             nan_color="lightgray", point_size=point_size, render_points_as_spheres=False,
-            scalar_bar_args={"title": "", "label_font_size": 14, "position_x": 0.33,
-                             "position_y": 0.10, "width": 0.34, "height": 0.05},
+            show_scalar_bar=False,  # one shared bar is managed centrally in _apply_scale
         )
-        self._feature_mapper = actor.mapper
-        self._set_feature_labels(initial, "linear")
+        actor.SetVisibility(False)
+        return cloud, actor.mapper, actor, scale_clim
 
     def _scale_label(self, feature: str, mode: str) -> str:
         """Text above the colour bar: the feature's unit annotated with the active scale mode."""
@@ -277,22 +334,38 @@ class plottingClass:
         unit_actor.GetTextProperty().SetJustificationToCentered()
 
     def _apply_scale(self, feature: str, mode: str) -> None:
-        """Colour `feature` with scale `mode` live: pick the value/rank array, set the log flag and
-        colour range, relabel and re-render. A mode with no valid range (e.g. log on a feature with no
-        positive values) renders as linear, but the requested `mode` is kept so cycling still advances."""
+        """Colour `feature` with scale `mode` live: show its point-set cloud (swapping the visible actor
+        + re-tying the shared colour bar when the point set changes), pick the value/rank array, set the
+        log flag and colour range, relabel and re-render. A mode with no valid range (e.g. log on a
+        feature with no positive values) renders as linear, but the requested `mode` is kept so cycling
+        still advances."""
         self._active_feature = feature
         self._scale_mode = mode
+        pointset = self._feature_pointset[feature]
+        if pointset not in self._clouds:  # this feature's cloud is empty -> nothing to show
+            return
+        cloud, mapper = self._clouds[pointset], self._mappers[pointset]
+
+        if self._scalar_bar_ps != pointset:  # point set changed -> swap visible actor + re-tie the bar
+            for ps, actor in self._actors.items():
+                actor.SetVisibility(ps == pointset)
+            if self._scalar_bar_ps != "<none>":
+                self.plotter.remove_scalar_bar(title="")
+            self.plotter.add_scalar_bar(title="", mapper=mapper, label_font_size=14,
+                                        position_x=0.33, position_y=0.10, width=0.34, height=0.05)
+            self._scalar_bar_ps = pointset
+
         clim = self._feature_scale_clim[feature][mode]
         render_mode = mode
         if clim is None:  # mode unavailable for this feature -> fall back to linear for rendering
             render_mode = "linear"
             clim = self._feature_scale_clim[feature]["linear"]
         array = feature + _RANK_SUFFIX if render_mode == "rank" else feature
-        self._feature_cloud.set_active_scalars(array)
-        self._feature_mapper.array_name = array
-        self._feature_mapper.lookup_table.log_scale = (render_mode == "log")
+        cloud.set_active_scalars(array)
+        mapper.array_name = array
+        mapper.lookup_table.log_scale = (render_mode == "log")
         if clim is not None:
-            self._feature_mapper.scalar_range = clim
+            mapper.scalar_range = clim
         self._set_feature_labels(feature, render_mode)
         self.plotter.render()
 
@@ -300,19 +373,63 @@ class plottingClass:
         """Switch the active feature, re-applying the currently-selected colour-scale mode."""
         self._apply_scale(feature, self._scale_mode)
 
-    def _add_feature_selector(self, size: int = 26, gap: int = 8) -> None:
-        """Add one toggle button per feature (a left-edge panel); clicking one makes it the active
-        feature and visually deselects the others (radio behaviour)."""
+    def _add_feature_selector(self, size: int = 26, gap: int = 8, pair_offset: int = 95) -> None:
+        """Add a toggle button per feature in a single left-edge column, grouped under category headers
+        (Geometry / Segment / PLC / Other). Paired measures — the two features sharing a FEATURE_DISPLAY
+        colour group — sit on one row as `measure  [method] [method]` (e.g. `area  [simpson] [shoelace]`)
+        to save height; singletons show the full name. Clicking one makes it the active feature and
+        deselects the others (radio behaviour). Bottom-anchored (survives a resize); reads top-to-bottom."""
+        x = 12
+        listed = {m for _, members in _SELECTOR_CATEGORIES for m in members}
+        other = tuple(f for f in self._feature_names if f not in listed)
+
+        # rows top-to-bottom: a header per non-empty category, then one row per colour group (1-2 features)
+        rows: list[tuple] = []
+        for name, members in (*_SELECTOR_CATEGORIES, ("Other", other)):
+            feats = [f for f in members if f in self._feature_names]
+            if not feats:
+                continue
+            rows.append(("header", name))
+            by_group: dict[str, list[str]] = {}
+            for f in feats:  # group paired measures (same colour group) onto one row, preserving order
+                by_group.setdefault(FEATURE_DISPLAY[f][0], []).append(f)
+            for group_feats in by_group.values():
+                rows.append(("features", group_feats))
+            rows.append(("spacer",))
+        if rows and rows[-1][0] == "spacer":
+            rows.pop()  # no trailing spacer
+
         self._feature_buttons = []
-        for idx, feature in enumerate(self._feature_names):
-            y = 12 + idx * (size + gap)
-            widget = self.plotter.add_checkbox_button_widget(
-                self._make_feature_callback(feature, idx),
-                value=(feature == self._feature_initial),
-                position=(12, y), size=size, color_on="green", color_off="grey",
-            )
-            self._feature_buttons.append(widget)
-            self.plotter.add_text(feature, position=(12 + size + 8, y + 4), font_size=10)
+        idx = 0  # each button's index into self._feature_buttons (for the radio)
+        n = len(rows)
+        for r, item in enumerate(rows):
+            y = 12 + (n - 1 - r) * (size + gap)  # first row highest
+            if item[0] == "header":
+                self.plotter.add_text(f"{item[1]}:", position=(x, y + 3), font_size=15,
+                                      color="cyan", shadow=True)  # bright + shadow -> visible on any bg
+            elif item[0] == "features":
+                group_feats = item[1]
+                if len(group_feats) == 1:  # singleton -> button + full feature name
+                    feature = group_feats[0]
+                    widget = self.plotter.add_checkbox_button_widget(
+                        self._make_feature_callback(feature, idx),
+                        value=(feature == self._feature_initial),
+                        position=(x + 2, y), size=size, color_on="green", color_off="grey",
+                    )
+                    self._feature_buttons.append(widget); idx += 1
+                    self.plotter.add_text(feature, position=(x + 2 + size + 6, y + 5), font_size=10)
+                else:  # paired measure -> measure name once, then a short-labelled button per method
+                    group = FEATURE_DISPLAY[group_feats[0]][0]
+                    self.plotter.add_text(_GROUP_DISPLAY.get(group, group), position=(x, y + 5), font_size=12)
+                    for j, feature in enumerate(group_feats):
+                        bx = x + 56 + j * pair_offset  # buttons start after the measure label
+                        widget = self.plotter.add_checkbox_button_widget(
+                            self._make_feature_callback(feature, idx),
+                            value=(feature == self._feature_initial),
+                            position=(bx + 2, y), size=size, color_on="green", color_off="grey",
+                        )
+                        self._feature_buttons.append(widget); idx += 1
+                        self.plotter.add_text(_method_label(feature), position=(bx + 2 + size + 4, y + 5), font_size=10)
 
     def _make_feature_callback(self, feature: str, idx: int):
         """Build the click callback for one feature button: enforce single-selection (radio) and
@@ -390,14 +507,15 @@ def get_profile_points_for_plot(profiles: list[profileData], profile_step: int =
     Returns one entry per profile so the result stays index-aligned with the print
     path; skipped profiles (every profile not on profile_step) and empty profiles
     contribute an empty (0, 3) array, which the plotter skips. point_step subsamples
-    points within each kept profile. If want_flat is set, only profiles whose `isFlat`
-    matches it are kept (None = no flatness filter). If category is "floor" or "profile",
-    only points of that category are kept (uses `floorMask`; ignored when it is None).
+    points within each kept profile. If want_flat is set, only profiles whose gap status
+    matches it are kept — a "gap" being a profile *not* in a cleaned filament segment
+    (`~isSegment`); None = no such filter. If category is "floor" or "profile", only points
+    of that category are kept (uses `floorMask`; ignored when it is None).
     """
     points = []
     for i, profile in enumerate(profiles):
         include = i % profile_step == 0 and profile.x.shape[0] > 0
-        if want_flat is not None and bool(profile.isFlat) != want_flat:
+        if want_flat is not None and (not _is_segment(profile)) != want_flat:  # gap = not a segment
             include = False
         if include:
             xs, zs = profile.x, profile.z
@@ -412,7 +530,7 @@ def get_profile_points_for_plot(profiles: list[profileData], profile_step: int =
     return points
 
 def width_point_arrays(profiles: list[profileData], idx_attr: str):
-    """One (2, 3) point array per profile from a 2-index attribute ("peaks" or "filamentWidthIdx").
+    """One (2, 3) point array per profile from a 2-index attribute ("widthFlankIdx" or "widthOuterIdx").
 
     One entry per profile keeps alignment with the print path; a profile without exactly two
     indices contributes an empty (0, 3) array (skipped on plot).
