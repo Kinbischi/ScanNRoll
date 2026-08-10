@@ -14,19 +14,20 @@ class profileData:
     b: Optional[float] = None
 
     floorMask: Optional[np.ndarray] = None  # per-point bool: True = floor point, False = profile (filament)
-    peaks: Optional[np.ndarray] = None      # the two width-edge indices (flank feet)
-    width: Optional[float] = None
-    filamentWidthIdx: Optional[np.ndarray] = None  # indices of the two outer filament points (filament-edge width)
-    filamentWidth: Optional[float] = None          # x-span between the two outer filament points
-    filamentHeight: Optional[float] = None         # robust filament height (95th pct of filament z above z=0)
-    filamentHeightSmooth: Optional[float] = None   # robust filament height (max of median-smoothed z above z=0)
-    isFlat: Optional[bool] = None
+    widthFlankIdx: Optional[np.ndarray] = None  # the two flank-foot indices of widthFlank
+    widthFlank: Optional[float] = None      # filament width between the outer smoothed-slope flank feet
+    widthOuterIdx: Optional[np.ndarray] = None  # indices of the two outer filament points (filament-edge width)
+    widthOuter: Optional[float] = None          # x-span between the two outer filament points
+    heightP95: Optional[float] = None         # robust filament height (95th pct of filament z above z=0)
+    heightSmooth: Optional[float] = None   # robust filament height (max of median-smoothed z above z=0)
+    isFlat: Optional[bool] = None          # raw per-profile flag: True = no filament points (== floorMask.all())
+    isSegment: Optional[bool] = None       # cleaned run flag: True = part of a real filament segment (see clean_flat_runs)
     flatness: Optional[float] = None
-    area: Optional[float] = None           # filament cross-section, Simpson integration (profile-unit^2)
-    shoelaceArea: Optional[float] = None   # filament cross-section, shoelace polygon (profile-unit^2)
+    areaSimpson: Optional[float] = None    # filament cross-section, Simpson integration (profile-unit^2)
+    areaShoelace: Optional[float] = None   # filament cross-section, shoelace polygon (profile-unit^2)
     shoelaceArea2: Optional[float] = None
     segmentVolume: Optional[float] = None  # total volume of this profile's filament segment (area-unit*dist-unit)
-    sliceVolume: Optional[float] = None    # this profile's own slab volume, shoelaceArea * inter-profile gap
+    sliceVolume: Optional[float] = None    # this profile's own slab volume, areaShoelace * inter-profile gap
     segmentLength: Optional[float] = None  # along-path length of this profile's filament segment (dist units)
     defectLength: Optional[float] = None   # along-path length of this profile's pure-floor (no-filament) run
     maxSmoothedHeight: Optional[float] = None
@@ -48,6 +49,13 @@ class profileData:
     viscoPump1_VMAflow: Optional[float] = None
     viscoPump2_AcceleratorFlow: Optional[float] = None
 
+    @property
+    def isNotFlat(self) -> Optional[bool]:
+        """Inverse of `isFlat` (True = the profile HAS filament points). Derived, not a stored field,
+        so it needs no cache slot; used as a 0/1 heat-map feature that shares the "filament = high"
+        colour convention with `isSegment` (so the two flags read the same colour on filament)."""
+        return None if self.isFlat is None else (not self.isFlat)
+
     """
     # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")
     def integrate_area(self):
@@ -58,13 +66,13 @@ class profileData:
     # Area using shoelace formula --> (points must be ordered!, points do not need to be monotonically increasing in x)
     def shoelace_area(self):
         # chat gpt code
-        shoelaceArea = 0.5 * abs(np.dot(self.x, np.roll(self.y, 1)) - np.dot(self.y, np.roll(self.x, 1)))
+        areaShoelace = 0.5 * abs(np.dot(self.x, np.roll(self.y, 1)) - np.dot(self.y, np.roll(self.x, 1)))
 
         points= np.vstack((self.x,self.y))
         shifted = np.vstack((points[1:], points[0]))
         cross = points[:, 0] * shifted[:, 1] - shifted[:, 0] * points[:, 1]
         shoelaceArea2 = 0.5 * abs(np.sum(cross))
-        return shoelaceArea,shoelaceArea2
+        return areaShoelace,shoelaceArea2
 
     def find_max_height(self):
         self.maxSmoothedHeight = np.round(np.max(self.ySmooth),decimals=2)

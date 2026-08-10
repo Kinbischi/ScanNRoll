@@ -12,6 +12,7 @@ from profileLoading import count_profiles, load_profiles, save_profiles
 from profilePointsClass import profileData
 from profileProcessingAlgorithms import (
     categorize_floor_points,
+    clean_flat_runs,
     flag_flat_profiles,
     grow_profile_points,
     measure_filament_area,
@@ -22,7 +23,7 @@ from profileProcessingAlgorithms import (
     width_from_filament_edges,
     width_from_smoothed_slope,
 )
-
+ 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -56,11 +57,11 @@ def process_profiles(profiles: list[profileData]) -> tuple[list[profileData], fl
     grow_profile_points(profiles, use_profile_baseline=GROW_USE_PROFILE_BASELINE)
     flag_flat_profiles(profiles)  # flat = no filament points (uses floorMask; set after grow)
     # width, two ways: smoothed-slope flank feet and the outer filament points
-    width_from_smoothed_slope(profiles)  # -> peaks, width (smooths internally)
-    width_from_filament_edges(profiles)      # -> filamentWidthIdx, filamentWidth
-    measure_filament_height(profiles)        # -> filamentHeight, filamentHeightSmooth (robust filament heights)
+    width_from_smoothed_slope(profiles)  # -> widthFlankIdx, widthFlank (smooths internally)
+    width_from_filament_edges(profiles)      # -> widthOuterIdx, widthOuter
+    measure_filament_height(profiles)        # -> heightP95, heightSmooth (robust filament heights)
     # cross-sectional filament area above the median floor, two ways (integration + shoelace)
-    measure_filament_area(profiles)          # -> area, shoelaceArea
+    measure_filament_area(profiles)          # -> areaSimpson, areaShoelace
     # Optional steps in profileProcessingAlgorithms (import + call to enable): rotate_pointcloud
     # + translate_floor_to_zero (per-profile levelling).
     return profiles, level_angle, level_offset
@@ -88,6 +89,11 @@ def main() -> None:
     raw_start, raw_end = start + covered[0], start + covered[-1] + 1
     profiles = join_plc_to_profiles(profiles, plc)
     assert raw_end - raw_start == len(profiles), "PLC coverage is not a contiguous profile block"
+
+    # Clean the segment/defect run structure before measuring it: bridge sub-5 mm floor gaps and drop
+    # sub-10 mm filament blips from the noisy per-profile categorisation. Needs physical distances
+    # (rollerbandSpeed, from the join), so it runs here — before the run-based measures below.
+    clean_flat_runs(profiles)
 
     # Filament-segment volume runs here (not in process_profiles) because it needs the physical
     # inter-profile distances, which depend on rollerbandSpeed — only populated by the PLC join above.
