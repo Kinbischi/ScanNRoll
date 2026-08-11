@@ -4,7 +4,7 @@ import pyvista as pv
 import profile3Dplotting
 from datasetConfig import PROCESSED_FILE
 from featureComparison import compare_features
-from featurePlcTrends import plot_feature_plc_trends
+from featurePlcTrends import DEFAULT_FEATURES, plot_feature_plc_trends
 from plcData import PLC_COLUMNS
 from profileLoading import load_profiles, read_file_attrs
 from profileProcessingAlgorithms import unlevel_profiles
@@ -22,6 +22,10 @@ except (NameError, AttributeError):
 PROFILE_STEP = 3   # draw every Nth profile  (3D subsampling; points ~ total / (PROFILE_STEP * POINT_STEP))
 POINT_STEP = 2     # draw every Nth point
 VOXEL_SIZE = 10    # keep one point per cube of this edge (profile units, 0.01 mm; None = off) — see plottingClass
+
+# Features for the two feature-vs-PLC cells below (defined here so either cell runs independently).
+PLC_FEATURES = ("widthFlank", "heightP95", "areaSimpson", "areaShoelace", "sliceVolume",
+                "segmentVolume", "segmentLength", "defectLength")
 
 processed = load_profiles(PROCESSED_FILE)               # levelled columnar cache
 _attrs = read_file_attrs(PROCESSED_FILE)
@@ -63,24 +67,20 @@ pl.plot_feature_heatmap(processed, features=HEATMAP_FEATURES + PLC_COLUMNS,
 pl.show()
 
 
-# %% 2D feature-vs-time — normalized overlay; toggle/smooth curves   (needs a GUI backend)
-compare_features(processed,
-                 features=("printHeadTorque", "widthFlank", "heightP95", "areaSimpson",
-                           "viscoPump1_VMAflow", "mortarPumpFlow", "pressurePipeStart", "rollerbandSpeed"),
-                 initial=("printHeadTorque", "widthFlank", "viscoPump1_VMAflow"),
+# %% 2D feature-vs-time — all features + PLC vars, category-grouped; one curve -> its real units   (needs a GUI backend)
+compare_features(processed, features=DEFAULT_FEATURES + PLC_COLUMNS,
+                 initial=("printHeadTorque",), initial_smooth=("printHeadTorque",), smooth_window_init=25,
                  time_unit="min", profile_step=5)
 
-
-PLC_FEATURES = ("widthFlank", "heightP95", "areaSimpson", "areaShoelace", "sliceVolume",
-                "segmentVolume", "segmentLength", "defectLength")
 
 # %% 2D feature-vs-PLC (stepwise) — box/violin per level; toggle features, pick channel, median/mean   (needs a GUI backend)
 plot_feature_plc_trends(processed, kind="stepwise", features=PLC_FEATURES,
                         initial_feature="widthFlank", initial_channel="rollerbandSpeed", profile_step=5)
 
 
-# %% 2D feature-vs-PLC (continuous) — hexbin density + trend + Spearman; toggle features, pick channel   (needs a GUI backend)
-plot_feature_plc_trends(processed, kind="continuous", features=PLC_FEATURES,
+# %% 2D feature-vs-PLC (continuous) — hexbin density + trend; ANY subject on either axis   (needs a GUI backend)
+# Shared pool of all features + every PLC channel, grouped by category: x = pick one, y = toggle several.
+plot_feature_plc_trends(processed, kind="continuous", features=DEFAULT_FEATURES, channels=PLC_COLUMNS,
                         initial_feature="widthFlank", initial_channel="pressurePrintHead", profile_step=5)
 
 

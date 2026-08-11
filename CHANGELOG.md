@@ -94,6 +94,30 @@ This project does not yet use formal version numbers; changes accumulate under
   they were never persisted (`_TRANSIENT_FIELDS` is now empty). Old caches still load.
 
 ### Added
+- **Feature-vs-PLC continuous view: any subject on either axis.** The `kind="continuous"` cell now
+  offers a **shared pool of all features + every PLC channel on both axes** — a single-select x-picker and
+  a multi-select y-panel — so you can plot feature-vs-channel, channel-vs-channel, or feature-vs-feature
+  (e.g. torque vs pressure). Both selectors are **category-grouped** (Geometry / Segment / PLC / Other);
+  the x-panel enforces single-select across its groups (`_on_xpick`, re-entrancy-guarded). `_render` now
+  sources x from `self._phys[xkey]` for continuous (was the channel-only `self._chan`). Discrete channels
+  are included — they render as vertical stripes in the hexbin (the stepwise cell remains the richer view
+  for discrete x). The stepwise cell is unchanged. Grouping is factored into a shared
+  `profile3Dplotting.group_by_category(keys)` reused by `featureComparison` and `featurePlcTrends`.
+  `featurePlcTrends.py` + `dataAnalysis.py` (continuous cell now passes `DEFAULT_FEATURES` + `PLC_COLUMNS`).
+- **Feature-vs-time comparison plot: grouped, colour-matched selector + optional initial smoothing.**
+  `compare_features` now lays its left panel out **by category** (Geometry / Segment / PLC / Other,
+  sharing `profile3Dplotting.SELECTOR_CATEGORIES` with the 3D heat-map) under a bold header per group,
+  and **tints each "show" checkbox with its curve's colour** so the panel maps visually to the plot.
+  Curves are drawn thicker (`lw` 1.0 → 2.0) and the whole panel is inset from the left edge, fixing the
+  clipped checkboxes. New `initial_smooth` + `smooth_window_init` args open chosen curves **pre-smoothed**
+  (the `dataAnalysis.py` cell now opens showing only the smoothed `printHeadTorque`); `PLC_FEATURES` moved
+  to the config cell so either feature-vs-PLC cell runs standalone. `_SELECTOR_CATEGORIES` promoted to
+  public `SELECTOR_CATEGORIES`. `featureComparison.py` + `dataAnalysis.py`; no cache change.
+  - **Follow-ups:** the cell now offers **all features + every PLC channel** (`DEFAULT_FEATURES` +
+    `PLC_COLUMNS`, grouped); when **exactly one curve is shown it is drawn in its real units** on a
+    self-scaled y-axis (labelled with the feature's unit) instead of the normalised 0-1 overlay
+    (`_apply_display`, driven by every show/smooth/window change); the checkbox tick-boxes are bigger
+    (`s` 60 → 90); and the "smooth"/"show" column headers are spaced apart so they no longer collide.
 - **Unified 3D heat-map with automatic point-set switching.** `plot_feature_heatmap` now **prebuilds one
   point cloud per point set** (`_build_one_cloud`) and swaps the visible one when the active feature
   changes (`_feature_pointset` / `_ALL_POINT_FEATURES`): filament geometry + PLC channels colour the
@@ -104,7 +128,7 @@ This project does not yet use formal version numbers; changes accumulate under
   separate heat-map cells (main / defect / flags) collapse into **one** `dataAnalysis.py` cell listing
   every feature; the per-call `category` argument is gone. The **feature buttons are grouped** in a
   single left column under shadowed category headers — Geometry / Segment / PLC (/ Other), via
-  `_SELECTOR_CATEGORIES` — and **paired measures** (the two features sharing a FEATURE_DISPLAY colour
+  `SELECTOR_CATEGORIES` — and **paired measures** (the two features sharing a FEATURE_DISPLAY colour
   group, e.g. `area` + `shoelaceArea`) sit **side by side on one row** to save height; the default 3D
   window is enlarged so the panel fits. `profile3Dplotting.py` only; no cache change.
 - **Cleaned segment structure in a dedicated `isSegment` flag (was overloaded onto `isFlat`).** New

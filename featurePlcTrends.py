@@ -1,15 +1,17 @@
 """Interactive 2D feature-vs-PLC-channel correlation plot.
 
-Puts a PLC machine-log channel on the x-axis and one or more per-profile features on the y-axis to
-reveal correlations. The plot is built for one channel family at a time via the `kind` argument, so
-`dataAnalysis.py` opens it as two cells:
-- `kind="stepwise"` — the discrete/setpoint channels (`rollerbandSpeed`, `printHeadMixxingSpeed`, the
+Correlates per-profile geometry features and PLC machine-log channels. The plot is built for one
+channel family at a time via the `kind` argument, so `dataAnalysis.py` opens it as two cells:
+- `kind="stepwise"` — a discrete/setpoint channel on x (`rollerbandSpeed`, `printHeadMixxingSpeed`, the
   two viscotec pumps): the feature is aggregated **per level** as a box or a violin.
-- `kind="continuous"` — the analogue signals (pressures, torque): a **hexbin density + trend line**.
+- `kind="continuous"` — a **hexbin density + trend line**, with **any subject on either axis**: a shared
+  pool of all features + channels feeds both a single-select x-picker and a multi-select y-panel, so you
+  can plot feature-vs-channel, channel-vs-channel, or feature-vs-feature (e.g. torque vs pressure).
 
-Live controls: toggle each feature (`show`), pick the x-axis channel (a radio "dropdown"), a
-median/mean statistic toggle, and — in the stepwise view — a box/violin shape toggle. Complements
-`featureComparison` (feature-vs-time) and the 3D heat-map (`profile3Dplotting.plot_feature_heatmap`).
+Live controls: toggle the y feature(s) (`show`), pick the x subject, a median/mean statistic toggle,
+and — in the stepwise view — a box/violin shape toggle. In the continuous view both selectors are
+category-grouped (Geometry / Segment / PLC). Complements `featureComparison` (feature-vs-time) and the
+3D heat-map (`profile3Dplotting.plot_feature_heatmap`).
 
 Single vs multiple features (auto-switch):
 - **one** feature shown -> the rich single-feature view in real units: a box or violin per level
@@ -29,7 +31,7 @@ from matplotlib.widgets import CheckButtons, RadioButtons
 from scipy.stats import spearmanr
 
 from featureComparison import _feature_values, _normalise, _scale_range  # shared per-profile helpers
-from profile3Dplotting import FEATURE_DISPLAY  # single source of truth for unit factor + label
+from profile3Dplotting import FEATURE_DISPLAY, group_by_category  # unit factor/label + shared grouping
 from profileProcessingAlgorithms import _contiguous_runs, _segment_mask  # runs + cleaned segment membership
 from profilePointsClass import profileData
 
@@ -72,12 +74,13 @@ MIN_RUNS_FOR_BOX = 4        # a level needs > 3 surviving runs to draw a box/vio
 
 
 class FeaturePlcPlot:
-    """Interactive feature-vs-PLC-channel plot for one channel family (`kind`): box/violin per level
-    (stepwise) or hexbin density + trend (continuous), with feature show-toggles, a channel radio
-    selector, a median/mean statistic toggle, and — for stepwise — a box/violin shape toggle.
+    """Interactive feature-vs-PLC plot for one `kind`: box/violin per level (stepwise) or hexbin density
+    + trend (continuous), with a median/mean statistic toggle and — for stepwise — a box/violin shape
+    toggle. Stepwise has feature show-toggles + a channel radio (x); continuous offers a shared
+    feature+channel pool on both axes via category-grouped y (multi) and x (single) panels.
 
-    Per-feature scale is fixed once from the (idle-excluded) values, so the normalised multi-feature
-    overlay stays comparable as channel / stat / selection change.
+    Per-subject scale is fixed once from the (idle-excluded) values, so the normalised multi-feature
+    overlay stays comparable as the x subject / stat / selection change.
     """
 
     def __init__(self, profiles: list[profileData], kind: str, features: tuple[str, ...] = DEFAULT_FEATURES,
@@ -103,31 +106,45 @@ class FeaturePlcPlot:
         profs = kept[::profile_step]
 
         self._kind = kind
-        self._features = tuple(features)
-        # per-feature physical values (None -> NaN) and a fixed robust 0-1 scale for the overlay
-        self._phys = {f: _feature_values(profs, f) for f in self._features}
-        self._scale = {f: _scale_range(self._phys[f], CLIP_PERCENTILE) for f in self._features}
-        # per-channel physical values; force-show every configured channel (constants included), drop
-        # only a channel with no finite value at all (nothing to plot).
-        chan_vals = {c: _feature_values(profs, c) for c in channels}
-        self._chan = {c: v for c, v in chan_vals.items() if np.isfinite(v).any()}
-        self._channels = [c for c in channels if c in self._chan]
-        if not self._channels:
-            raise ValueError("no PLC channels with any data")
-
-        self._channel = initial_channel if initial_channel in self._chan else self._channels[0]
-        self._visible = {f: (f == initial_feature) for f in self._features}
         self._stat = "median"
         self._shape = "box"
+        self._suppress = False  # re-entrancy guard for the continuous x-panel's single-select behaviour
 
-        # Stepwise view: precompute one datapoint per run (segment/defect) for the RUN_FEATURES, from
-        # the FULL profile list (idle-exclusion + decimation break run contiguity). Also keep the full
-        # channel arrays + idle mask so each run's channel level(s) can be looked up per active channel.
-        if kind == "stepwise":
+        if kind == "continuous":
+            # Any subject on either axis: one shared pool of features + channels. x = single-select
+            # (self._channel holds the current x key, which may be a feature OR a channel), y = multi.
+            subjects = tuple(dict.fromkeys((*features, *channels)))  # union, order preserved, deduped
+            self._features = subjects           # the y-options drive `visible` in _render
+            self._x_options = subjects
+            self._y_options = subjects
+            self._phys = {k: _feature_values(profs, k) for k in subjects}
+            self._scale = {k: _scale_range(self._phys[k], CLIP_PERCENTILE) for k in subjects}
+            self._channel = (initial_channel if initial_channel in subjects
+                             else initial_feature if initial_feature in subjects else subjects[0])
+            self._visible = {k: (k == initial_feature) for k in subjects}
+        else:  # stepwise: discrete channels on x (box/violin per level), features on y
+            self._features = tuple(features)
+            self._y_options = self._features
+            # per-feature physical values (None -> NaN) and a fixed robust 0-1 scale for the overlay
+            self._phys = {f: _feature_values(profs, f) for f in self._features}
+            self._scale = {f: _scale_range(self._phys[f], CLIP_PERCENTILE) for f in self._features}
+            # per-channel physical values; force-show every configured channel (constants included), drop
+            # only a channel with no finite value at all (nothing to plot).
+            chan_vals = {c: _feature_values(profs, c) for c in channels}
+            self._chan = {c: v for c, v in chan_vals.items() if np.isfinite(v).any()}
+            self._channels = [c for c in channels if c in self._chan]
+            if not self._channels:
+                raise ValueError("no PLC channels with any data")
+            self._x_options = tuple(self._channels)
+            self._channel = initial_channel if initial_channel in self._chan else self._channels[0]
+            self._visible = {f: (f == initial_feature) for f in self._features}
+            # Precompute one datapoint per run (segment/defect) for the RUN_FEATURES, from the FULL profile
+            # list (idle-exclusion + decimation break run contiguity). Also keep the full channel arrays +
+            # idle mask so each run's channel level(s) can be looked up per active channel.
             self._build_run_table(profiles, channels)
 
-        logger.info("Feature-vs-PLC (%s): %d non-idle profiles (step %d), %d channels",
-                    kind, len(profs), profile_step, len(self._channels))
+        logger.info("Feature-vs-PLC (%s): %d non-idle profiles (step %d), %d x-options, %d y-options",
+                    kind, len(profs), profile_step, len(self._x_options), len(self._y_options))
         self._build_figure()
         self._render()
 
@@ -234,41 +251,105 @@ class FeaturePlcPlot:
 
     # --- figure / widgets -----------------------------------------------------------------------
     def _build_figure(self) -> None:
-        """Lay out the main axes + a fixed colour-bar axes, and the widget panels (a box/violin shape
-        radio replaces the bottom-left slot only for the stepwise kind)."""
+        """Lay out the main axes + colour-bar axes, the stat toggle, and the feature/channel selectors.
+
+        Stepwise keeps two single widgets (feature checkboxes on the left, a channel radio on the right)
+        plus a box/violin shape radio. Continuous instead offers a shared feature+channel pool on BOTH
+        axes, via two category-grouped CheckButtons panels: y (multi-select) left, x (single-select,
+        enforced in `_on_xpick`) right."""
         self.fig = plt.figure(figsize=(16, 8.5))
-        self._show_ax = self.fig.add_axes((0.015, 0.30, 0.15, 0.60), frame_on=True)
         self.ax = self.fig.add_axes((0.26, 0.12, 0.52, 0.80))
         self.cax = self.fig.add_axes((0.795, 0.12, 0.015, 0.80))  # hexbin colour bar (continuous only)
-        self._chan_ax = self.fig.add_axes((0.855, 0.30, 0.14, 0.60), frame_on=True)
         self._stat_ax = self.fig.add_axes((0.855, 0.08, 0.14, 0.15), frame_on=True)
-        for a, title in ((self._show_ax, "features (show)"), (self._chan_ax, "channel (x)"),
-                         (self._stat_ax, "stat")):
-            a.set_title(title, fontsize=11)
-
-        box = {"s": 90}
-        self._show = CheckButtons(self._show_ax, list(self._features),
-                                  [self._visible[f] for f in self._features],
-                                  frame_props=box, check_props=box)
-        for txt in self._show.labels:
-            txt.set_fontsize(10)
-        self._chan_radio = RadioButtons(self._chan_ax, self._channels,
-                                        active=self._channels.index(self._channel))
+        self._stat_ax.set_title("stat", fontsize=11)
         self._stat_radio = RadioButtons(self._stat_ax, list(_STATS), active=_STATS.index(self._stat))
-        self._show.on_clicked(self._on_show)
-        self._chan_radio.on_clicked(self._on_channel)
         self._stat_radio.on_clicked(self._on_stat)
 
         self._shape_radio = None
-        if self._kind == "stepwise":  # shape (box/violin) only applies to the per-level view
+        if self._kind == "continuous":
+            # any subject on either axis -> grouped panels, y (multi) left, x (single) right
+            self._y_groups = self._build_grouped_panel(
+                (0.008, 0.05, 0.165, 0.90), self._y_options, self._on_show,
+                {k: self._visible[k] for k in self._y_options}, "y: show (multi)")
+            self._x_groups = self._build_grouped_panel(
+                (0.828, 0.26, 0.168, 0.66), self._x_options, self._on_xpick,
+                {k: (k == self._channel) for k in self._x_options}, "x: pick one")
+        else:
+            self._show_ax = self.fig.add_axes((0.015, 0.30, 0.15, 0.60), frame_on=True)
+            self._chan_ax = self.fig.add_axes((0.855, 0.30, 0.14, 0.60), frame_on=True)
+            self._show_ax.set_title("features (show)", fontsize=11)
+            self._chan_ax.set_title("channel (x)", fontsize=11)
+            box = {"s": 90}
+            self._show = CheckButtons(self._show_ax, list(self._features),
+                                      [self._visible[f] for f in self._features],
+                                      frame_props=box, check_props=box)
+            for txt in self._show.labels:
+                txt.set_fontsize(10)
+            self._chan_radio = RadioButtons(self._chan_ax, self._channels,
+                                            active=self._channels.index(self._channel))
+            self._show.on_clicked(self._on_show)
+            self._chan_radio.on_clicked(self._on_channel)
+            # shape (box/violin) only applies to the per-level view
             self._shape_ax = self.fig.add_axes((0.015, 0.08, 0.15, 0.15), frame_on=True)
             self._shape_ax.set_title("shape", fontsize=11)
             self._shape_radio = RadioButtons(self._shape_ax, list(_SHAPES), active=_SHAPES.index(self._shape))
             self._shape_radio.on_clicked(self._on_shape)
 
+    def _build_grouped_panel(self, region: tuple[float, float, float, float], keys: tuple[str, ...],
+                             on_click, states: dict[str, bool], title: str,
+                             box_size: int = 34) -> list[tuple[CheckButtons, list[str]]]:
+        """Draw a category-grouped CheckButtons panel inside `region` (x, y, w, h in figure fractions):
+        one CheckButtons per non-empty SELECTOR_CATEGORIES group under a bold header. Returns
+        `[(CheckButtons, [keys]), ...]`; multi- vs single-select is enforced by `on_click`. Row height is
+        uniform across groups (each group's axes height ∝ its key count)."""
+        groups = group_by_category(keys)
+        rx, ry, rw, rh = region
+        self.fig.text(rx, ry + rh + 0.012, title, fontsize=11, ha="left", fontweight="bold")
+        total_rows = sum(len(g) for _, g in groups)
+        n_groups = len(groups)
+        h_head, gap = 0.024, 0.012
+        avail = rh - n_groups * h_head - max(0, n_groups - 1) * gap
+        row_h = avail / total_rows if total_rows else avail
+        out: list[tuple[CheckButtons, list[str]]] = []
+        top = ry + rh
+        for name, gkeys in groups:
+            n = len(gkeys)
+            self.fig.text(rx, top - h_head / 2, name, fontsize=10, fontweight="bold",
+                          va="center", ha="left", color="0.2")
+            body_bot = top - h_head - n * row_h
+            panel = self.fig.add_axes((rx, body_bot, rw, n * row_h), frame_on=False)
+            panel.set_xticks([]); panel.set_yticks([])
+            cb = CheckButtons(panel, list(gkeys), [states.get(k, False) for k in gkeys],
+                              frame_props={"s": box_size}, check_props={"s": box_size})
+            for txt in cb.labels:
+                txt.set_fontsize(9)
+            cb.on_clicked(on_click)
+            out.append((cb, list(gkeys)))
+            top = body_bot - gap
+        return out
+
     def _on_show(self, _label: str) -> None:
-        for f, status in zip(self._features, self._show.get_status()):
-            self._visible[f] = bool(status)
+        if self._kind == "continuous":  # multi-select over every grouped y-panel
+            for cb, keys in self._y_groups:
+                for k, status in zip(keys, cb.get_status()):
+                    self._visible[k] = bool(status)
+        else:
+            for f, status in zip(self._features, self._show.get_status()):
+                self._visible[f] = bool(status)
+        self._render()
+
+    def _on_xpick(self, label: str) -> None:
+        """Continuous x-panel single-select: make `label` the sole checked x key across all groups.
+        Re-entrant (each corrective `set_active` re-fires this), so guard with `self._suppress`."""
+        if self._suppress:
+            return
+        self._channel = label
+        self._suppress = True
+        for cb, keys in self._x_groups:  # force exactly the clicked key checked, everything else off
+            for i, (cur, want) in enumerate(zip(cb.get_status(), [k == label for k in keys])):
+                if cur != want:
+                    cb.set_active(i)
+        self._suppress = False
         self._render()
 
     def _on_channel(self, label: str) -> None:
@@ -294,7 +375,8 @@ class FeaturePlcPlot:
         self.cax.clear()
         self.cax.set_visible(False)
         channel = self._channel
-        x = self._chan[channel]
+        # x from the active x key: a channel array (stepwise) or any subject's values (continuous)
+        x = self._chan[channel] if self._kind == "stepwise" else self._phys[channel]
         visible = [f for f in self._features if self._visible[f]]
 
         if not visible:
@@ -468,22 +550,27 @@ def plot_feature_plc_trends(profiles: list[profileData], kind: str,
                             idle_speed: float = IDLE_SPEED, show: bool = True) -> plt.Figure:
     """Interactive feature-vs-PLC-channel correlation plot for one channel family.
 
-    Puts a PLC channel on x and per-profile feature(s) on y. `kind="stepwise"` aggregates the feature
-    per discrete level (a box or violin); `kind="continuous"` draws a hexbin density + trend line. One
-    feature shown -> the rich single-feature view in real units with a Spearman r; two or more ->
-    normalised 0-1 trend lines with each feature's r in the legend. A median/mean toggle sets the central
-    statistic (median+IQR or mean+std); the stepwise view also has a box/violin shape toggle. Idle
-    profiles (`rollerbandSpeed == idle_speed`) are excluded.
+    `kind="stepwise"` puts a discrete PLC channel on x and aggregates the feature per level (a box or
+    violin). `kind="continuous"` draws a hexbin density + trend line and offers a **shared pool of all
+    `features` + `channels` on both axes** (single-select x-picker, multi-select y-panel), so any subject
+    can be x or y — feature-vs-channel, channel-vs-channel, or feature-vs-feature. One subject shown on y
+    -> the rich single view in real units with a Spearman r; two or more -> normalised 0-1 trend lines
+    with each subject's r in the legend. A median/mean toggle sets the central statistic (median+IQR or
+    mean+std); the stepwise view also has a box/violin shape toggle. Idle profiles
+    (`rollerbandSpeed == idle_speed`) are excluded.
 
     Args:
         profiles: processed, PLC-joined profiles (need `rollerbandSpeed` + the channels).
         kind: "stepwise" (discrete channels → box/violin) or "continuous" (analogue channels → density).
-        features: y-axis features to offer (checkboxes); default = per-profile geometry + the broadcast
-            segment aggregates (`segmentVolume`/`segmentLength`/`defectLength` — one value per run).
-        channels: PLC channels to offer on x; defaults to `STEPWISE_CHANNELS` / `CONTINUOUS_CHANNELS`
-            for the `kind`. Constant channels are shown (only all-NaN channels are dropped).
-        initial_feature: the feature shown first.
-        initial_channel: the x-axis channel shown first (defaults to the first offered channel).
+        features: geometry/segment features to offer; default = per-profile geometry + the broadcast
+            segment aggregates (`segmentVolume`/`segmentLength`/`defectLength` — one value per run). In
+            the continuous kind these join `channels` in the shared any-axis pool (offered on x and y).
+        channels: PLC channels to offer; defaults to `STEPWISE_CHANNELS` / `CONTINUOUS_CHANNELS` for the
+            `kind`. Stepwise: the x-axis channels (constant channels shown, only all-NaN dropped).
+            Continuous: added to the shared pool so they can sit on either axis.
+        initial_feature: the subject shown first on y.
+        initial_channel: the subject shown first on x (defaults to the first offered x option; in the
+            continuous kind this may be a feature or a channel).
         profile_step: use every Nth non-idle profile (decimation for responsiveness).
         idle_speed: `rollerbandSpeed` value treated as idle/stopped and excluded.
         show: call `plt.show()` before returning (set False for headless use).

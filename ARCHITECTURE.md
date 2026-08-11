@@ -43,8 +43,8 @@ The system has two halves that meet at an HDF5 file:
 | `profileLoading.py` | `load_profiles()` / `save_profiles()` — read/write `profileData` to HDF5. `save_profiles` writes the processed cache as a **columnar table** (padded `[N,L]` points, `[N,2]` index pairs, `[N]` scalar columns, names) for fast bulk loading; `load_profiles` reads that, and reads raw acquisition files (`x`/`z` + `arrival_time`, rest ignored), but **rejects** an old per-group *processed* cache with a "reprocess" error. `read_file_attrs()` returns file-level attributes (e.g. `raw_start`/`raw_end`). | Active |
 | `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). Imports only `profilePointsClass`. | Active |
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, via `profile_advance_distances`, imported from `profileProcessingAlgorithms`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
-| `featureComparison.py` | `compare_features()` — matplotlib 2D overlay comparing several per-profile features over time, each robustly normalised to 0–1 (percentile-clipped so outliers don't flatten it), with a `CheckButtons` panel to toggle curves. Imports `profilePointsClass` + `FEATURE_DISPLAY`. | Active |
-| `featurePlcTrends.py` | `plot_feature_plc_trends()` — matplotlib 2D feature-vs-PLC-channel correlation plot, one channel family per call via `kind`: `"stepwise"` (discrete channels → box/violin per level) or `"continuous"` (analogue channels → hexbin density + trend); Spearman r; several features → normalised 0–1 trend lines. Live feature toggles, a channel radio, a median/mean statistic radio, and (stepwise) a box/violin shape radio; constant channels force-shown; idle excluded; fixed x-axis. Segment/defect features are aggregated **per run** in the stepwise view (one point per segment/defect) with `n=` counts, a >3-runs box rule, and >0.5 m / cross-level exclusions. Reuses `featureComparison`'s value/scale helpers, `FEATURE_DISPLAY`, and `profileProcessingAlgorithms._contiguous_runs`. | Active |
+| `featureComparison.py` | `compare_features()` — matplotlib 2D comparison of per-profile features + PLC channels over time: several shown → robustly normalised 0–1 overlay (percentile-clipped so outliers don't flatten it), a lone curve → its real units on a self-scaled axis. Category-grouped, colour-matched `CheckButtons` panel to toggle/smooth curves. Imports `profilePointsClass` + `FEATURE_DISPLAY` + `group_by_category`. | Active |
+| `featurePlcTrends.py` | `plot_feature_plc_trends()` — matplotlib 2D feature-vs-PLC correlation plot, one `kind` per call: `"stepwise"` (discrete channel on x → box/violin per level) or `"continuous"` (hexbin density + trend, with **any subject on either axis** — a shared feature+channel pool feeds a single-select x-picker and multi-select y-panel, both category-grouped, so feature-vs-channel / channel-vs-channel / feature-vs-feature all work); Spearman r; several y → normalised 0–1 trend lines. Live median/mean statistic radio, and (stepwise) a box/violin shape radio + channel radio; constant channels force-shown; idle excluded; fixed x-axis (stepwise). Segment/defect features are aggregated **per run** in the stepwise view (one point per segment/defect) with `n=` counts, a >3-runs box rule, and >0.5 m / cross-level exclusions. Reuses `featureComparison`'s value/scale helpers, `FEATURE_DISPLAY`, `group_by_category`, and `profileProcessingAlgorithms._contiguous_runs`. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `datasetConfig.py` | The active experiment's file paths (`RAW_FILE`, `PLC_FILE`, derived `PROCESSED_FILE`) in one place, imported by both entry points so they can't drift. Switch datasets by moving the "ACTIVE" pair; others kept commented. | Active |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → join the PLC log by timestamp (trims to the overlap) → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
@@ -83,9 +83,10 @@ Edges: `profileProcessingAlgorithms`, `profileLoading`, `profile3Dplotting`, and
 import `profilePointsClass`; `profileLoading` also imports `profileProcessingAlgorithms`
 (`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`PLC_COLUMNS`) and
 `profileProcessingAlgorithms` (`profile_advance_distances`); and
-`featureComparison` imports `profilePointsClass` + `profile3Dplotting` (`FEATURE_DISPLAY`); and
+`featureComparison` imports `profilePointsClass` + `profile3Dplotting` (`FEATURE_DISPLAY`,
+`group_by_category`); and
 `featurePlcTrends` imports `featureComparison` (the `_feature_values`/`_scale_range`/`_normalise`
-helpers) + `profile3Dplotting` (`FEATURE_DISPLAY`) + `plcData` (`PLC_COLUMNS`) + `profilePointsClass`
+helpers) + `profile3Dplotting` (`FEATURE_DISPLAY`, `group_by_category`) + `plcData` (`PLC_COLUMNS`) + `profilePointsClass`
 (and `scipy.stats.spearmanr`). The entry points compose these: `profileProcessing` imports
 `profileLoading` + `profileProcessingAlgorithms` + `plcData`; `dataAnalysis` imports `profileLoading` +
 `profile3Dplotting` + `plcData` + `featureComparison` + `featurePlcTrends`. No cycles.
@@ -184,20 +185,25 @@ and each joined PLC channel — set by `FEATURE_DISPLAY` in `profile3Dplotting.p
 group switches the colour scale (linear / log / clip / rank) live.
 
 For comparing features against each other (rather than one at a time in space),
-`featureComparison.compare_features` (matplotlib) overlays several as time series on one axis,
-each robustly normalised to 0–1 (percentile-clipped so a spike doesn't flatten the curve); the
-legend shows both the scale range that maps to 0–1 and the true min–max (revealing clipped
-outliers). Left-panel checkboxes toggle each curve ("show") and moving-average-smooth selected
-curves ("smooth", with a window slider); the legend keeps every feature's colour and bolds the
-shown ones. New `dataAnalysis.py` cell.
+`featureComparison.compare_features` (matplotlib) plots several as time series on one axis. When **two or
+more** are shown they are robustly normalised to 0–1 (percentile-clipped so a spike doesn't flatten the
+curve) so different scales overlay; when **exactly one** is shown it is drawn in its **real units** on a
+self-scaled y-axis (`_apply_display`). The legend shows both the scale range that maps to 0–1 and the true
+min–max (revealing clipped outliers). A left panel grouped by category (Geometry / Segment / PLC / Other,
+via `group_by_category`) toggles each curve ("show", tinted to match its curve) and moving-average-smooths
+selected curves ("smooth", with a window slider; `initial_smooth`/`smooth_window_init` open chosen curves
+pre-smoothed); the legend keeps every feature's colour and bolds the shown ones. The `dataAnalysis.py`
+cell offers all features + every PLC channel.
 
 For checking whether a feature **correlates with a machine input**, `featurePlcTrends.plot_feature_plc_trends`
 (matplotlib) puts a PLC channel on x and per-profile feature(s) on y. It is built for one channel family
 at a time via the `kind` argument, so `dataAnalysis.py` opens it as **two cells**: `kind="stepwise"` for
 the discrete/setpoint channels (`STEPWISE_CHANNELS`: `rollerbandSpeed`, `printHeadMixxingSpeed`, the two
-viscotec pumps) aggregated **per level**, and `kind="continuous"` for the analogue signals
-(`CONTINUOUS_CHANNELS`: pressures, torque) drawn as a density cloud (`mortarPumpFlow`/`rollerbandHeight`
-are omitted). One feature shown → the rich single-feature view in real units (a **box or violin** per
+viscotec pumps) aggregated **per level**, and `kind="continuous"` for a density cloud that offers **any
+subject on either axis** — a shared pool of all features + every PLC channel feeds a single-select
+x-picker and a multi-select y-panel (both category-grouped), so feature-vs-channel, channel-vs-channel,
+and feature-vs-feature all work (discrete channels show as hexbin stripes; the stepwise cell stays the
+richer view for discrete x). One subject shown on y → the rich single view in real units (a **box or violin** per
 level — a box/violin shape radio — or a hexbin density + central-per-quantile-bin trend + spread band)
 with a Spearman r; two or more → each collapses to one normalised-0–1 central±band trend line on a shared
 axis, with each feature's Spearman r in the legend (several boxes/densities can't overlay legibly). A
@@ -212,8 +218,9 @@ would break run contiguity), not per profile — and each level shows an **`n=` 
 box/violin only where there are **> 3** runs, and **excludes** runs longer than **0.5 m** or that span
 more than one level of the active channel (so it generalises to the viscotec channels in future datasets).
 The stepwise **x-axis is fixed** to the channel's full level set. Idle profiles (`rollerbandSpeed == 0`)
-are excluded so trends reflect actual printing. It reuses `featureComparison`'s value/scale helpers and
-`FEATURE_DISPLAY`. Two `dataAnalysis.py` cells (need a GUI backend, like `compare_features`).
+are excluded so trends reflect actual printing. It reuses `featureComparison`'s value/scale helpers,
+`FEATURE_DISPLAY`, and `group_by_category` (the shared category grouping). Two `dataAnalysis.py` cells
+(need a GUI backend, like `compare_features`).
 
 Key detail: `width_from_smoothed_slope` cascades box filters (`moving_average`) over `z` (locally —
 no stored arrays), takes the gradient and smooths it again, runs `scipy.signal.find_peaks` on that

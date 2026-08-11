@@ -70,12 +70,30 @@ def _method_label(feature: str) -> str:
 
 
 # Feature-selector button-panel categories (grouping + headers only; independent of the FEATURE_DISPLAY
-# colour groups and the point-set groups above). Features not in any list fall under "Other".
-_SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
+# colour groups and the point-set groups above). Features not in any list fall under "Other". Public so the
+# 2D feature-comparison selector (featureComparison.py) groups identically — single source of truth (§11).
+SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Geometry", ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace", "sliceVolume")),
     ("Segment", ("segmentVolume", "segmentLength", "defectLength", "isSegment", "isNotFlat")),
     ("PLC", PLC_COLUMNS),
 )
+
+
+def group_by_category(keys: "tuple[str, ...] | list[str]") -> list[tuple[str, list[str]]]:
+    """Group `keys` under the SELECTOR_CATEGORIES headers (category member order within each; empty
+    categories skipped), with any unlisted key collected under a trailing 'Other'. Shared grouping for
+    the 2D selector panels (featureComparison + featurePlcTrends), matching the 3D heat-map layout."""
+    present = set(keys)
+    listed = {m for _, members in SELECTOR_CATEGORIES for m in members}
+    groups: list[tuple[str, list[str]]] = []
+    for name, members in SELECTOR_CATEGORIES:
+        members_present = [m for m in members if m in present]
+        if members_present:
+            groups.append((name, members_present))
+    other = [k for k in keys if k not in listed]
+    if other:
+        groups.append(("Other", other))
+    return groups
 
 
 class plottingClass:
@@ -373,19 +391,24 @@ class plottingClass:
         """Switch the active feature, re-applying the currently-selected colour-scale mode."""
         self._apply_scale(feature, self._scale_mode)
 
-    def _add_feature_selector(self, size: int = 26, gap: int = 8, pair_offset: int = 95) -> None:
+    def _add_feature_selector(self, size: int = 26, gap: int = 8,
+                              label_col: int = 84, pair_offset: int = 140) -> None:
         """Add a toggle button per feature in a single left-edge column, grouped under category headers
         (Geometry / Segment / PLC / Other). Paired measures — the two features sharing a FEATURE_DISPLAY
         colour group — sit on one row as `measure  [method] [method]` (e.g. `area  [simpson] [shoelace]`)
         to save height; singletons show the full name. Clicking one makes it the active feature and
-        deselects the others (radio behaviour). Bottom-anchored (survives a resize); reads top-to-bottom."""
+        deselects the others (radio behaviour). Bottom-anchored (survives a resize); reads top-to-bottom.
+
+        `label_col` (px) is the measure-name column width before the first paired button — wide enough to
+        clear the widest measure label ("height"). `pair_offset` (px) is the per-method column pitch —
+        wide enough that a button plus its (up to ~100 px) method label clears the next button."""
         x = 12
-        listed = {m for _, members in _SELECTOR_CATEGORIES for m in members}
+        listed = {m for _, members in SELECTOR_CATEGORIES for m in members}
         other = tuple(f for f in self._feature_names if f not in listed)
 
         # rows top-to-bottom: a header per non-empty category, then one row per colour group (1-2 features)
         rows: list[tuple] = []
-        for name, members in (*_SELECTOR_CATEGORIES, ("Other", other)):
+        for name, members in (*SELECTOR_CATEGORIES, ("Other", other)):
             feats = [f for f in members if f in self._feature_names]
             if not feats:
                 continue
@@ -422,7 +445,7 @@ class plottingClass:
                     group = FEATURE_DISPLAY[group_feats[0]][0]
                     self.plotter.add_text(_GROUP_DISPLAY.get(group, group), position=(x, y + 5), font_size=12)
                     for j, feature in enumerate(group_feats):
-                        bx = x + 56 + j * pair_offset  # buttons start after the measure label
+                        bx = x + label_col + j * pair_offset  # buttons start after the measure label
                         widget = self.plotter.add_checkbox_button_widget(
                             self._make_feature_callback(feature, idx),
                             value=(feature == self._feature_initial),
