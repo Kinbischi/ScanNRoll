@@ -36,6 +36,13 @@ PLC_COLUMNS: tuple[str, ...] = (
     "viscoPump2_AcceleratorFlow",
 )
 
+# Derived PLC channels: computed from the raw log columns, not parsed from the CSV. Each is a
+# `profileData` @property (e.g. `pipePressureDifference = pressurePipeStart - pressurePipeEnd`), so it
+# needs no cache slot. `PLC_COLUMNS` alone drives CSV parsing; `ALL_PLC_COLUMNS` is the channel set the
+# plots offer (raw + derived) — use it in FEATURE_DISPLAY, the selector grouping, and the plot cells.
+DERIVED_PLC_COLUMNS: tuple[str, ...] = ("pipePressureDifference",)
+ALL_PLC_COLUMNS: tuple[str, ...] = PLC_COLUMNS + DERIVED_PLC_COLUMNS
+
 # Windows FILETIME counts 100 ns ticks since 1601-01-01 UTC; convert to Unix seconds by
 # dividing by the ticks-per-second and shifting the epoch by the 1601->1970 gap.
 _FILETIME_TICKS_PER_S = 10_000_000                # 100 ns per tick
