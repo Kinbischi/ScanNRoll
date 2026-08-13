@@ -36,6 +36,11 @@ OX200 LIDAR sensor for additive-manufacturing ("Rollerband") research.
   segment) and per-profile slab (`sliceVolume`); segment length (`segmentLength`) and the length of
   each pure-floor gap between segments (`defectLength`). Computed after the PLC join (they need the
   physical inter-profile spacing from `rollerbandSpeed`).
+- **Segment shape** = how a segment's cross-section evolves along its length (`measure_segment_shape`):
+  a startup bulge, a slight **body taper**, and usually an **abrupt end rupture**. Summarised per segment
+  by `segmentBodyThinning`/`segmentBodyThinningStability` (thinning), `segmentCriticalArea` +
+  `segmentRuptureLength` (rupture), `segmentHeadOvershoot` (startup), and the `segmentRuptures` 0/1 gate
+  — broadcast onto every profile of the segment like the volume/length aggregates.
 - **Registration** (currently dormant) = aligning overlapping left/centre/right
   profiles in `x` and joining them into one combined profile.
 
@@ -52,7 +57,8 @@ Python/
 ├── profileProcessing.py                  # ACTIVE  process entry point: raw → processed cache
 ├── dataAnalysis.py                       # ACTIVE  plot workbench (# %% cells): cache → 3D plot (raw "before" reconstructed)
 ├── profilePointsClass.py                 # ACTIVE  profileData dataclass ONLY (pure data model)
-├── profileProcessingAlgorithms.py        # ACTIVE  processing algorithms (rotate/level/smooth/width/flatness)
+├── profileProcessingAlgorithms.py        # ACTIVE  processing algorithms (rotate/level/smooth/width/flatness/runs)
+├── segmentShape.py                       # ACTIVE  per-segment shape features (thinning / startup / rupture)
 ├── profileLoading.py                     # ACTIVE  load_profiles/save_profiles (HDF5 columnar-cache I/O)
 ├── plcData.py                            # ACTIVE  PLC machine-log CSV load + timestamp join
 ├── profile3Dplotting.py                  # ACTIVE  PyVista 3D plotting + print-path geometry

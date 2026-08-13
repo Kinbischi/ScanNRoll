@@ -51,22 +51,30 @@ CONTINUOUS_CHANNELS: tuple[str, ...] = (
     "pressurePrintHead", "printHeadTorque", "pressurePipeEnd", "pressurePipeStart",
 )
 
-# Default y-features: per-profile geometry plus the broadcast segment/defect aggregates. NOTE the last
-# three (segmentVolume, segmentLength, defectLength) are one value repeated across a whole run, not
-# independent per-profile samples: aggregating them per level weights each segment by its profile count,
-# and a filament segment can span several speed levels. defectLength is only set on flat (pure-floor)
-# profiles, so it plots on a disjoint profile subset from the filament features.
+# Per-segment shape features (measure_segment_shape): one value broadcast across a whole segment, like
+# segmentVolume/segmentLength. The rupture/critical ones are NaN on segments that ended thick.
+_SEGMENT_SHAPE_FEATURES = (
+    "segmentBodyThinning", "segmentBodyThinningStability", "segmentCriticalArea",
+    "segmentRuptureLength", "segmentHeadOvershoot", "segmentRuptures",
+)
+
+# Default y-features: per-profile geometry plus the broadcast segment/defect aggregates. NOTE the segment
+# aggregates (segmentVolume/segmentLength/defectLength + the shape features) are one value repeated across a
+# whole run, not independent per-profile samples: aggregating them per level weights each segment by its
+# profile count, and a filament segment can span several speed levels. defectLength is only set on flat
+# (pure-floor) profiles, so it plots on a disjoint profile subset from the filament features.
 DEFAULT_FEATURES: tuple[str, ...] = (
     "widthFlank", "widthOuter", "heightP95", "heightSmooth",
     "areaSimpson", "areaShoelace", "sliceVolume",
     "segmentVolume", "segmentLength", "defectLength",
+    *_SEGMENT_SHAPE_FEATURES,
 )
 _STATS = ("median", "mean")  # central statistic for the boxes / trend / overlay lines (stat toggle)
 _SHAPES = ("box", "violin")  # single-feature stepwise distribution shape (shape toggle)
 
 # "Run" features are one value broadcast across a whole run, so in the stepwise view they are aggregated
 # per run (one datapoint per segment/defect), not per profile. Everything else stays per-profile.
-SEGMENT_FEATURES = ("segmentVolume", "segmentLength")  # per filament segment (run of non-flat profiles)
+SEGMENT_FEATURES = ("segmentVolume", "segmentLength", *_SEGMENT_SHAPE_FEATURES)  # per filament segment
 DEFECT_FEATURES = ("defectLength",)                    # per defect (run of flat / pure-floor profiles)
 RUN_FEATURES = SEGMENT_FEATURES + DEFECT_FEATURES
 MAX_RUN_LENGTH_MM = 500.0   # runs longer than 0.5 m are dropped (a long continuous filament/defect isn't interesting)
@@ -161,13 +169,21 @@ class FeaturePlcPlot:
         self._full_idle = np.array([p.rollerbandSpeed == IDLE_SPEED for p in profiles])
         self._runs = {"segment": [], "defect": []}
         for kind_key, mask, feats in (("segment", seg, SEGMENT_FEATURES), ("defect", ~seg, DEFECT_FEATURES)):
+            length_field = "segmentLength" if kind_key == "segment" else "defectLength"
             for idx in _contiguous_runs(mask):
                 head = profiles[int(idx[0])]
-                values = {f: getattr(head, f) for f in feats}  # broadcast -> same across the run
-                if any(v is None for v in values.values()):
+                length_raw = getattr(head, length_field)
+                if length_raw is None:  # need the run length for the filters; skip runs without it
                     continue
-                values = {f: float(v) * FEATURE_DISPLAY[f][1] for f, v in values.items()}
-                length_mm = values["segmentLength" if kind_key == "segment" else "defectLength"]
+                length_mm = float(length_raw) * FEATURE_DISPLAY[length_field][1]
+                # per-feature display value; a missing feature (None / NaN — e.g. the rupture fields on a
+                # segment that ended thick) becomes NaN, so that feature's runs are skipped downstream while
+                # the run still contributes the features it does have (e.g. its taper).
+                values = {}
+                for f in feats:
+                    v = getattr(head, f)
+                    values[f] = (float(v) * FEATURE_DISPLAY[f][1]
+                                 if v is not None and np.isfinite(float(v)) else np.nan)
                 self._runs[kind_key].append((idx, length_mm, values))
         # per-run normalisation scale for the run features (values within the length cutoff)
         for f in self._features:
@@ -218,6 +234,8 @@ class FeaturePlcPlot:
         for idx, length_mm, values in self._runs[bucket]:
             if length_mm > MAX_RUN_LENGTH_MM:
                 continue
+            if not np.isfinite(values[feature]):  # this feature is absent on this run (e.g. no rupture) -> skip
+                continue
             ch = np.round(chan[idx], 6)
             ch = ch[~idle[idx] & np.isfinite(ch)]
             lv = np.unique(ch)
@@ -230,7 +248,10 @@ class FeaturePlcPlot:
 
     def _binned_trend(self, xs: np.ndarray, ys: np.ndarray) -> tuple[np.ndarray, ...]:
         """Central stat (+ spread band, per the stat toggle) of ys within `N_TREND_BINS` quantile bins
-        of xs; returns (bin centres, central, band_low, band_high)."""
+        of xs; returns (bin centres, central, band_low, band_high). Empty when there are no points
+        (e.g. an all-NaN x-subject leaves no finite x/y pairs — np.quantile would otherwise raise)."""
+        if xs.size == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([])
         edges = np.unique(np.quantile(xs, np.linspace(0.0, 1.0, N_TREND_BINS + 1)))
         if edges.size < 2:
             return np.array([]), np.array([]), np.array([]), np.array([])

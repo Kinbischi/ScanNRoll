@@ -94,6 +94,43 @@ This project does not yet use formal version numbers; changes accumulate under
   they were never persisted (`_TRANSIENT_FIELDS` is now empty). Old caches still load.
 
 ### Added
+- **Per-segment shape features (thinning / startup / rupture).** New `measure_segment_shape`
+  (in the new **`segmentShape.py`** module, run in `profileProcessing.main` after `clean_flat_runs` /
+  `measure_run_lengths`) characterises each filament segment's cross-section (`areaShoelace`, smoothed)
+  along the print path and **broadcasts** six per-segment values onto every profile of the segment (like
+  `segmentVolume`): `segmentBodyThinning` (%/mm body thinning, Theil–Sen over the body plateau),
+  `segmentBodyThinningStability` (Spearman −1..1), `segmentCriticalArea` (cross-section at the rupture start,
+  mm²), `segmentRuptureLength` (mm terminal cliff), `segmentHeadOvershoot` (% startup bulge), and
+  `segmentRuptures` (0/1 gate — the rupture/critical fields are NaN on segments that ended thick). The
+  **body** is the plateau where the smoothed area stays within a ±band of `bodyLevel` — from where the
+  ramp settles in (found via the early-overshoot-peak → sustained-in-band scan) to where it leaves the band
+  before the cliff — and the taper is fit there; validated on the 120 real segments to be robust to its own
+  parameters (Spearman 0.99 to the band width, 0.998 to the smoothing), while faithfully representing the
+  actual plateau. The rupture start is the derivative cliff top; a single-point "sharpness" was rejected as
+  smoothing-fragile. The features slot into every plot via the **Segment**
+  selector group and `FEATURE_DISPLAY`; in the feature-vs-PLC **stepwise** view they are aggregated
+  **per segment** (added to `SEGMENT_FEATURES`), so they can be compared per `rollerbandSpeed` level
+  (e.g. does the cross-section at rupture, or the rupture rate, depend on belt speed?). The feature-vs-PLC
+  run table now tolerates per-feature NaN so a non-rupturing segment still contributes its taper. A
+  per-profile **`segmentSection`** flag (1 body / 2 rupture / 3 the overshoot-peak band; the start ramp and
+  the body↔rupture shoulder are NaN, since no feature uses them as a whole) is also set — an **all-points
+  heat-map feature** that shows *exactly* the regions the features are computed over, for debugging. The
+  heat-map feature selector was regrouped so the many features
+  fit: segment features are laid out by **phase** (startup / body / rupture / runs / flags) via the new
+  `FEATURE_UI` map (decoupled from the colour groups, so each keeps its own clim), the PLC channels are
+  **packed two per row** with short labels, and each row's button pitch is sized to its labels. New
+  `profileData` fields (auto-persist via the columnar
+  cache). **Reprocess** to populate them.
+- **`pipePressureDifference` derived PLC channel** (`pressurePipeStart - pressurePipeEnd`). A computed
+  `profileData` `@property` (like `isNotFlat`), so it needs **no cache slot and no reprocess** — it reads
+  the already-cached pipe pressures. Registered as a PLC channel via the new `plcData.ALL_PLC_COLUMNS`
+  (raw `PLC_COLUMNS` + `DERIVED_PLC_COLUMNS`), which now feeds `FEATURE_DISPLAY`, the selector's `PLC`
+  group, and the `dataAnalysis.py` plot cells — so it appears in the **3D heat-map**, **feature-vs-time**,
+  and **both feature-vs-PLC** views (plus the stepwise cell's y-features). `PLC_COLUMNS` alone still drives
+  CSV parsing (the derived name is not a log column). `profilePointsClass.py` + `plcData.py` +
+  `profile3Dplotting.py` + `dataAnalysis.py`. Also hardened `featurePlcTrends._binned_trend` against an
+  **all-NaN x-subject** (no finite pairs → `np.quantile` used to raise) — now returns an empty trend, so
+  putting an unset subject on the continuous x-axis no longer crashes.
 - **Feature-vs-PLC continuous view: any subject on either axis.** The `kind="continuous"` cell now
   offers a **shared pool of all features + every PLC channel on both axes** — a single-select x-picker and
   a multi-select y-panel — so you can plot feature-vs-channel, channel-vs-channel, or feature-vs-feature

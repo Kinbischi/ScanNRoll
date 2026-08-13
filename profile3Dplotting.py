@@ -2,7 +2,7 @@ from typing import cast
 
 import numpy as np
 import pyvista as pv
-from plcData import PLC_COLUMNS
+from plcData import ALL_PLC_COLUMNS
 from profilePointsClass import profileData
 from profileProcessingAlgorithms import _is_segment, profile_advance_distances
 
@@ -31,10 +31,19 @@ FEATURE_DISPLAY = {
     # bridged floor-only gaps are visible.
     "isSegment":        ("segFlag", 1.0, ""),
     "isNotFlat":        ("segFlag", 1.0, ""),
-    # PLC machine-log channels (joined by timestamp): each its own colour group, since their
-    # magnitudes differ widely. Shown in the PLC's native engineering units (factor 1.0; the
-    # unit label is left blank as the physical units aren't recorded in the CSV).
-    **{name: (name, 1.0, "") for name in PLC_COLUMNS},
+    # Per-segment shape features (measure_segment_shape), broadcast over the segment. Already in physical
+    # units (factor 1.0), each its own colour group. NaN off a rupture / on a too-short segment.
+    "segmentBodyThinning":         ("segmentBodyThinning", 1.0, "%/mm"),
+    "segmentBodyThinningStability": ("segmentBodyThinningStability", 1.0, ""),
+    "segmentCriticalArea":      ("segmentCriticalArea", 1.0, "mm^2"),
+    "segmentRuptureLength":     ("segmentRuptureLength", 1.0, "mm"),
+    "segmentHeadOvershoot":     ("segmentHeadOvershoot", 1.0, "%"),
+    "segmentRuptures":          ("segmentRuptures", 1.0, ""),
+    "segmentSection":           ("segmentSection", 1.0, ""),   # per-profile phase code (0/1/2); debug view
+    # PLC machine-log channels (joined by timestamp) + derived ones (e.g. pipePressureDifference):
+    # each its own colour group, since their magnitudes differ widely. Shown in the PLC's native
+    # engineering units (factor 1.0; the unit label is left blank as the units aren't recorded in the CSV).
+    **{name: (name, 1.0, "") for name in ALL_PLC_COLUMNS},
 }
 
 # Heat-map colour-scale modes, cycled live by the scale button (see plottingClass._add_scale_button).
@@ -47,7 +56,9 @@ _RANK_SUFFIX = "__rank"          # per-feature companion array holding the [0, 1
 # Heat-map point set per feature: the unified heat-map prebuilds one cloud per distinct point set and
 # swaps the visible one when the active feature changes. These features live on floor/gap profiles (no
 # filament points) so they are coloured over ALL points; every other feature colours the filament points.
-_ALL_POINT_FEATURES = frozenset({"isSegment", "isNotFlat", "defectLength"})
+# `segmentSection` (the startup/body/rupture phase code) is coloured over ALL points too, so each segment's
+# phase bands show full-width in the print context (the off-segment floor is NaN = the NaN colour).
+_ALL_POINT_FEATURES = frozenset({"isSegment", "isNotFlat", "defectLength", "segmentSection"})
 
 
 def _feature_pointset(feature: str) -> "str | None":
@@ -74,9 +85,41 @@ def _method_label(feature: str) -> str:
 # 2D feature-comparison selector (featureComparison.py) groups identically — single source of truth (§11).
 SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Geometry", ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace", "sliceVolume")),
-    ("Segment", ("segmentVolume", "segmentLength", "defectLength", "isSegment", "isNotFlat")),
-    ("PLC", PLC_COLUMNS),
+    ("Segment", ("segmentHeadOvershoot",                                               # startup phase
+                 "segmentBodyThinning", "segmentBodyThinningStability",                      # body phase
+                 "segmentRuptures", "segmentCriticalArea", "segmentRuptureLength",    # rupture phase
+                 "segmentVolume", "segmentLength", "defectLength",                    # run aggregates
+                 "isSegment", "isNotFlat", "segmentSection")),                        # flags + debug
+    ("PLC", ALL_PLC_COLUMNS),
 )
+
+# Selector UI overrides, decoupled from the FEATURE_DISPLAY colour groups (which set each feature's heat-map
+# clim). feature -> (row group, short button label): features in the same row group render on ONE row
+# `rowlabel [btn:label] [btn:label] …` (like the width/area pairs) but keep their OWN colour scale. Used to
+# pack the many segment-shape features into per-phase rows so the panel doesn't overflow the window.
+FEATURE_UI: dict[str, tuple[str, str]] = {
+    "segmentHeadOvershoot":     ("startup", "overshoot"),
+    "segmentBodyThinning":         ("body", "taper"),
+    "segmentBodyThinningStability": ("body", "steady"),
+    "segmentRuptures":          ("rupture", "ruptured"),
+    "segmentCriticalArea":      ("rupture", "start"),      # cross-section at the rupture start
+    "segmentRuptureLength":     ("rupture", "length"),
+    "segmentVolume":            ("runs", "seg vol"),
+    "segmentLength":            ("runs", "seg len"),
+    "defectLength":             ("runs", "defect"),
+    "isSegment":                ("flags", "isSeg"),
+    "isNotFlat":                ("flags", "notFlat"),
+    "segmentSection":           ("flags", "phase"),
+}
+# PLC channels are packed a few per row with short labels so the (many) channels don't overflow the panel.
+_PLC_LABEL: dict[str, str] = {
+    "mortarPumpFlow": "mortarFlow", "pressurePipeEnd": "pPipeEnd", "pressurePipeStart": "pPipeStart",
+    "pressurePrintHead": "pPrintHead", "printHeadMixxingSpeed": "mixSpeed", "printHeadTorque": "torque",
+    "rollerbandHeight": "rbHeight", "rollerbandSpeed": "rbSpeed", "viscoPump1_VMAflow": "visco1",
+    "viscoPump2_AcceleratorFlow": "visco2", "pipePressureDifference": "pPipeDiff",
+}
+_PLC_PER_ROW = 2       # PLC channels packed this many per selector row
+_SELECTOR_CHAR_PX = 11  # approx px per character (button labels, font 10) for sizing each row's button pitch
 
 
 def group_by_category(keys: "tuple[str, ...] | list[str]") -> list[tuple[str, list[str]]]:
@@ -391,33 +434,45 @@ class plottingClass:
         """Switch the active feature, re-applying the currently-selected colour-scale mode."""
         self._apply_scale(feature, self._scale_mode)
 
-    def _add_feature_selector(self, size: int = 26, gap: int = 8,
-                              label_col: int = 84, pair_offset: int = 140) -> None:
+    def _add_feature_selector(self, size: int = 26, gap: int = 8, label_col: int = 94) -> None:
         """Add a toggle button per feature in a single left-edge column, grouped under category headers
-        (Geometry / Segment / PLC / Other). Paired measures — the two features sharing a FEATURE_DISPLAY
-        colour group — sit on one row as `measure  [method] [method]` (e.g. `area  [simpson] [shoelace]`)
-        to save height; singletons show the full name. Clicking one makes it the active feature and
-        deselects the others (radio behaviour). Bottom-anchored (survives a resize); reads top-to-bottom.
+        (Geometry / Segment / PLC / Other). Related features share one row as `rowlabel [lbl] [lbl] …`
+        to save height: FEATURE_DISPLAY colour pairs (width/area) as `measure [method] [method]`, the
+        segment-shape features by phase via FEATURE_UI (startup / body / rupture / runs / flags), and the
+        PLC channels packed `_PLC_PER_ROW` per row with short labels; other features get a full-name row.
+        Clicking one makes it the active feature and deselects the others (radio). Bottom-anchored
+        (survives a resize); reads top-to-bottom.
 
-        `label_col` (px) is the measure-name column width before the first paired button — wide enough to
-        clear the widest measure label ("height"). `pair_offset` (px) is the per-method column pitch —
-        wide enough that a button plus its (up to ~100 px) method label clears the next button."""
+        `label_col` (px) is the row-label column width before the first button. Each row's button pitch is
+        sized to fit its widest label (`_SELECTOR_CHAR_PX`), so short-labelled rows stay compact."""
         x = 12
         listed = {m for _, members in SELECTOR_CATEGORIES for m in members}
         other = tuple(f for f in self._feature_names if f not in listed)
 
-        # rows top-to-bottom: a header per non-empty category, then one row per colour group (1-2 features)
+        # rows top-to-bottom: a header per category, then feature rows as (row_label_or_None, [(feature, label), …])
         rows: list[tuple] = []
         for name, members in (*SELECTOR_CATEGORIES, ("Other", other)):
             feats = [f for f in members if f in self._feature_names]
             if not feats:
                 continue
             rows.append(("header", name))
-            by_group: dict[str, list[str]] = {}
-            for f in feats:  # group paired measures (same colour group) onto one row, preserving order
-                by_group.setdefault(FEATURE_DISPLAY[f][0], []).append(f)
-            for group_feats in by_group.values():
-                rows.append(("features", group_feats))
+            if name == "PLC":  # pack channels a few per row (short labels, no row label)
+                for i in range(0, len(feats), _PLC_PER_ROW):
+                    rows.append(("features", None, [(f, _PLC_LABEL.get(f, f)) for f in feats[i:i + _PLC_PER_ROW]]))
+            else:
+                groups: dict[str, list[tuple[str, "str | None"]]] = {}
+                for f in feats:  # group by FEATURE_UI row group, else by FEATURE_DISPLAY colour group
+                    key, lbl = FEATURE_UI[f] if f in FEATURE_UI else (FEATURE_DISPLAY[f][0], None)
+                    groups.setdefault(key, []).append((f, lbl))
+                for key, items in groups.items():
+                    if all(lbl is None for _, lbl in items):        # colour-group features (width/area/singletons)
+                        if len(items) >= 2:                          # paired measures -> measure + method labels
+                            rows.append(("features", _GROUP_DISPLAY.get(key, key),
+                                         [(f, _method_label(f)) for f, _ in items]))
+                        else:                                        # singleton -> full name, no row label
+                            rows.append(("features", None, [(items[0][0], items[0][0])]))
+                    else:                                            # FEATURE_UI phase group -> short labels
+                        rows.append(("features", key, list(items)))
             rows.append(("spacer",))
         if rows and rows[-1][0] == "spacer":
             rows.pop()  # no trailing spacer
@@ -431,28 +486,20 @@ class plottingClass:
                 self.plotter.add_text(f"{item[1]}:", position=(x, y + 3), font_size=15,
                                       color="cyan", shadow=True)  # bright + shadow -> visible on any bg
             elif item[0] == "features":
-                group_feats = item[1]
-                if len(group_feats) == 1:  # singleton -> button + full feature name
-                    feature = group_feats[0]
+                _, row_label, items = item
+                pitch = size + 8 + int(max(len(lbl) for _, lbl in items) * _SELECTOR_CHAR_PX) + 8
+                bx0 = x + (label_col if row_label else 2)
+                if row_label:
+                    self.plotter.add_text(row_label, position=(x, y + 5), font_size=12)
+                for j, (feature, lbl) in enumerate(items):
+                    bx = bx0 + j * pitch
                     widget = self.plotter.add_checkbox_button_widget(
                         self._make_feature_callback(feature, idx),
                         value=(feature == self._feature_initial),
-                        position=(x + 2, y), size=size, color_on="green", color_off="grey",
+                        position=(bx + 2, y), size=size, color_on="green", color_off="grey",
                     )
                     self._feature_buttons.append(widget); idx += 1
-                    self.plotter.add_text(feature, position=(x + 2 + size + 6, y + 5), font_size=10)
-                else:  # paired measure -> measure name once, then a short-labelled button per method
-                    group = FEATURE_DISPLAY[group_feats[0]][0]
-                    self.plotter.add_text(_GROUP_DISPLAY.get(group, group), position=(x, y + 5), font_size=12)
-                    for j, feature in enumerate(group_feats):
-                        bx = x + label_col + j * pair_offset  # buttons start after the measure label
-                        widget = self.plotter.add_checkbox_button_widget(
-                            self._make_feature_callback(feature, idx),
-                            value=(feature == self._feature_initial),
-                            position=(bx + 2, y), size=size, color_on="green", color_off="grey",
-                        )
-                        self._feature_buttons.append(widget); idx += 1
-                        self.plotter.add_text(_method_label(feature), position=(bx + 2 + size + 4, y + 5), font_size=10)
+                    self.plotter.add_text(lbl, position=(bx + 2 + size + 4, y + 5), font_size=10)
 
     def _make_feature_callback(self, feature: str, idx: int):
         """Build the click callback for one feature button: enforce single-selection (radio) and

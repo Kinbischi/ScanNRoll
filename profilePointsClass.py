@@ -30,6 +30,17 @@ class profileData:
     sliceVolume: Optional[float] = None    # this profile's own slab volume, areaShoelace * inter-profile gap
     segmentLength: Optional[float] = None  # along-path length of this profile's filament segment (dist units)
     defectLength: Optional[float] = None   # along-path length of this profile's pure-floor (no-filament) run
+    # Per-segment shape features (measure_segment_shape), broadcast onto every profile of the segment.
+    # Describe the thinning / startup / rupture of the filament along the print path; stored in physical
+    # units (mm, mm^2, %/mm, %, dimensionless). NaN where a phase is absent (e.g. rupture fields on a
+    # segment that ended thick); None off-segment or on a too-short segment.
+    segmentBodyThinning: Optional[float] = None        # body thinning rate (%/mm; negative = thinning)
+    segmentBodyThinningStability: Optional[float] = None  # steadiness of the thinning (Spearman area vs arc-length, -1..1)
+    segmentCriticalArea: Optional[float] = None     # cross-section at the rupture start / cliff top (mm^2)
+    segmentRuptureLength: Optional[float] = None    # arc-length of the terminal rupture cliff (mm; short = abrupt)
+    segmentHeadOvershoot: Optional[float] = None    # startup bulge height over the body level (%)
+    segmentRuptures: Optional[float] = None         # 1.0 if the segment ended in a rupture, else 0.0
+    segmentSection: Optional[float] = None          # per-profile phase flag (1 body, 2 rupture, 3 peak; else NaN); heat-map debug
     maxSmoothedHeight: Optional[float] = None
     maxSmoothedPlace: Optional[int] = None
     maxHeight: Optional[float] = None
@@ -55,6 +66,15 @@ class profileData:
         so it needs no cache slot; used as a 0/1 heat-map feature that shares the "filament = high"
         colour convention with `isSegment` (so the two flags read the same colour on filament)."""
         return None if self.isFlat is None else (not self.isFlat)
+
+    @property
+    def pipePressureDifference(self) -> Optional[float]:
+        """Pressure drop along the delivery pipe: `pressurePipeStart - pressurePipeEnd`. Derived from the
+        two joined PLC channels, not a stored field, so it needs no cache slot and no reprocess (it reads
+        the already-cached pressures). None if either pressure is missing."""
+        if self.pressurePipeStart is None or self.pressurePipeEnd is None:
+            return None
+        return self.pressurePipeStart - self.pressurePipeEnd
 
     """
     # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")

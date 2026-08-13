@@ -39,9 +39,10 @@ The system has two halves that meet at an HDF5 file:
 | ------ | -------------- | ------ |
 | `rawProfileUdpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileDataRaw`. | Active (standalone) |
 | `profilePointsClass.py` | Defines the analysis `profileData` dataclass **only** — the pure data model, no processing logic and no project imports. | Active |
-| `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, floor/filament categorisation, area, filament-segment volume, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`), and the along-track spacing helper `profile_advance_distances` (shared with the 3D layout). Imports only `profilePointsClass`. | Active |
+| `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, floor/filament categorisation, area, filament-segment volume, run lengths, segment-run cleanup, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`), and the along-track spacing helper `profile_advance_distances` (shared with the 3D layout). Imports only `profilePointsClass`. | Active |
+| `segmentShape.py` | `measure_segment_shape()` — per-segment shape features describing how a filament segment's cross-section evolves along the print path (startup bulge → body taper → abrupt rupture): `segmentBodyThinning`/`segmentBodyThinningStability` (fit over the ±band body plateau), `segmentCriticalArea` + `segmentRuptureLength` (at the derivative-cliff **rupture start**, gated by `segmentRuptures`), `segmentHeadOvershoot`, and a per-profile `segmentSection` flag (1 body / 2 rupture / 3 overshoot-peak; start + shoulder NaN). Broadcast per segment like the run aggregates. Imports `profilePointsClass` + `profileProcessingAlgorithms` (run helpers + spacing). | Active |
 | `profileLoading.py` | `load_profiles()` / `save_profiles()` — read/write `profileData` to HDF5. `save_profiles` writes the processed cache as a **columnar table** (padded `[N,L]` points, `[N,2]` index pairs, `[N]` scalar columns, names) for fast bulk loading; `load_profiles` reads that, and reads raw acquisition files (`x`/`z` + `arrival_time`, rest ignored), but **rejects** an old per-group *processed* cache with a "reprocess" error. `read_file_attrs()` returns file-level attributes (e.g. `raw_start`/`raw_end`). | Active |
-| `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). Imports only `profilePointsClass`. | Active |
+| `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). `PLC_COLUMNS` = the 10 raw CSV channels (drives parsing); `ALL_PLC_COLUMNS` = those + `DERIVED_PLC_COLUMNS` (e.g. `pipePressureDifference`, a `profileData` property) = the channel set the plots offer. Imports only `profilePointsClass`. | Active |
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, via `profile_advance_distances`, imported from `profileProcessingAlgorithms`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
 | `featureComparison.py` | `compare_features()` — matplotlib 2D comparison of per-profile features + PLC channels over time: several shown → robustly normalised 0–1 overlay (percentile-clipped so outliers don't flatten it), a lone curve → its real units on a self-scaled axis. Category-grouped, colour-matched `CheckButtons` panel to toggle/smooth curves. Imports `profilePointsClass` + `FEATURE_DISPLAY` + `group_by_category`. | Active |
 | `featurePlcTrends.py` | `plot_feature_plc_trends()` — matplotlib 2D feature-vs-PLC correlation plot, one `kind` per call: `"stepwise"` (discrete channel on x → box/violin per level) or `"continuous"` (hexbin density + trend, with **any subject on either axis** — a shared feature+channel pool feeds a single-select x-picker and multi-select y-panel, both category-grouped, so feature-vs-channel / channel-vs-channel / feature-vs-feature all work); Spearman r; several y → normalised 0–1 trend lines. Live median/mean statistic radio, and (stepwise) a box/violin shape radio + channel radio; constant channels force-shown; idle excluded; fixed x-axis (stepwise). Segment/defect features are aggregated **per run** in the stepwise view (one point per segment/defect) with `n=` counts, a >3-runs box rule, and >0.5 m / cross-level exclusions. Reuses `featureComparison`'s value/scale helpers, `FEATURE_DISPLAY`, `group_by_category`, and `profileProcessingAlgorithms._contiguous_runs`. | Active |
@@ -66,7 +67,7 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
    │    │                   └── featureComparison   matplotlib 2D feature overlay (imports FEATURE_DISPLAY)
    │    │                             ▲
    │    │                             └── featurePlcTrends   matplotlib 2D feature-vs-PLC plot
-   │    │                                 (imports featureComparison helpers + FEATURE_DISPLAY + PLC_COLUMNS)
+   │    │                                 (imports featureComparison helpers + FEATURE_DISPLAY + group_by_category)
    │    └──────────── profileProcessingAlgorithms  processing fns + FLATNESS_RMS_THRESHOLD
    │                        ▲
    └── profileLoading ──────┘               HDF5 I/O (also imports FLATNESS_RMS_THRESHOLD)
@@ -81,15 +82,17 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
 
 Edges: `profileProcessingAlgorithms`, `profileLoading`, `profile3Dplotting`, and `plcData` each
 import `profilePointsClass`; `profileLoading` also imports `profileProcessingAlgorithms`
-(`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`PLC_COLUMNS`) and
+(`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`ALL_PLC_COLUMNS`) and
 `profileProcessingAlgorithms` (`profile_advance_distances`); and
 `featureComparison` imports `profilePointsClass` + `profile3Dplotting` (`FEATURE_DISPLAY`,
 `group_by_category`); and
 `featurePlcTrends` imports `featureComparison` (the `_feature_values`/`_scale_range`/`_normalise`
-helpers) + `profile3Dplotting` (`FEATURE_DISPLAY`, `group_by_category`) + `plcData` (`PLC_COLUMNS`) + `profilePointsClass`
-(and `scipy.stats.spearmanr`). The entry points compose these: `profileProcessing` imports
-`profileLoading` + `profileProcessingAlgorithms` + `plcData`; `dataAnalysis` imports `profileLoading` +
-`profile3Dplotting` + `plcData` + `featureComparison` + `featurePlcTrends`. No cycles.
+helpers) + `profile3Dplotting` (`FEATURE_DISPLAY`, `group_by_category`) + `profilePointsClass`
+(and `scipy.stats.spearmanr`); and `segmentShape` imports `profilePointsClass` +
+`profileProcessingAlgorithms` (run helpers + `profile_advance_distances`) + `scipy.stats`. The entry
+points compose these: `profileProcessing` imports `profileLoading` + `profileProcessingAlgorithms` +
+`segmentShape` + `plcData`; `dataAnalysis` imports `profileLoading` + `profile3Dplotting` + `plcData` +
+`featureComparison` + `featurePlcTrends`. No cycles.
 
 - `profilePointsClass` is the foundation; everything depends on it.
 - The active analysis modules now use **explicit** imports; only the dormant
@@ -158,15 +161,24 @@ bridging gaps shorter than `SEGMENT_MERGE_GAP_MM` (5 mm) and dropping segments s
 removed (Exp1: 182 → 120 segments). It writes the cleaned result to a **dedicated `isSegment` flag**
 (starting from `~isFlat`), leaving the raw `isFlat` (= "no filament points", a `floorMask` summary)
 untouched — the two concepts stay separate. It must run here because it, too, needs the physical
-distances. Finally `measure_filament_volume` and `measure_run_lengths` (`profileProcessingAlgorithms`)
-run — also outside `process_profiles`, because they need the physical inter-profile distances
-(`profile_advance_distances`, from `rollerbandSpeed`, populated only by the join) — measuring the cleaned
-runs (segments = runs of `isSegment` via `_segment_mask`).
+distances. Finally `measure_filament_volume` + `measure_run_lengths` (`profileProcessingAlgorithms`) and
+`measure_segment_shape` (`segmentShape`) run — also outside `process_profiles`, because they need the
+physical inter-profile distances (`profile_advance_distances`, from `rollerbandSpeed`, populated only by
+the join) — measuring the cleaned runs (segments = runs of `isSegment` via `_segment_mask`).
 `measure_filament_volume` integrates `areaShoelace` along the print path over each **filament segment**
 (a run of non-flat profiles between flat ones), setting `segmentVolume` (the segment total, broadcast
 onto its profiles) and `sliceVolume` (each profile's own `area × gap` slab). `measure_run_lengths` sums
 the advance over each run and broadcasts the total: `segmentLength` (filament-segment length) and
 `defectLength` (length of a pure-floor / no-filament gap).
+`measure_segment_shape` (`segmentShape.py`) characterises how each segment's cross-section evolves along
+the print path — a **startup** ramp → overshoot bulge, a **body** plateau (slight taper), and usually an
+**abrupt terminal rupture** — broadcasting six per-segment values: `segmentBodyThinning` (%/mm) +
+`segmentBodyThinningStability` (thinning), `segmentCriticalArea` + `segmentRuptureLength` (rupture, at the
+derivative-cliff **rupture start**; NaN unless the segment ended thin per the `segmentRuptures` 0/1 gate),
+and `segmentHeadOvershoot` (startup). The **body** is the plateau where the smoothed area stays within a
+±band of `bodyLevel` — from where the ramp settles in to where it leaves the band before the cliff — and
+the taper is fit there, so the per-profile `segmentSection` flag (1 body / 2 rupture / 3 overshoot-peak
+band; the start ramp + the body↔rupture shoulder are NaN) faithfully shows exactly what the features use.
 
 The plot workbench (`dataAnalysis.py`) draws floor vs filament in two colours (`category=`), flat
 profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
@@ -296,8 +308,13 @@ reads instead of ~N tiny per-group reads (measured **~142 s → ~5 s** on the 90
   median-smoothed; NaN when flat), `areaSimpson` / `areaShoelace` (filament cross-section, integration vs
   shoelace; NaN when flat), `segmentVolume` / `sliceVolume` (filament-segment total vs per-profile slab
   volume; unset for flat profiles), `segmentLength` (filament-run length; unset on flat) / `defectLength`
-  (pure-floor-run length; unset on non-flat), `isFlat` (raw "no filament points"), `isSegment` (cleaned
-  "part of a real filament segment", from `clean_flat_runs`), `flatness` (line-fit RMS residual; unset for
+  (pure-floor-run length; unset on non-flat), the six per-segment **shape** features
+  (`segmentBodyThinning`, `segmentBodyThinningStability`, `segmentCriticalArea`, `segmentRuptureLength`,
+  `segmentHeadOvershoot`, `segmentRuptures`; broadcast per segment, NaN off a rupture / on a too-short
+  segment — `segmentCriticalArea` is the cross-section at the rupture start) plus `segmentSection`
+  (per-profile phase flag
+  1/2/3 = body/rupture/overshoot-peak, NaN elsewhere; a heat-map debug view), `isFlat` (raw "no filament points"), `isSegment`
+  (cleaned "part of a real filament segment", from `clean_flat_runs`), `flatness` (line-fit RMS residual; unset for
   the default floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor clock
   seconds, for inter-profile dt), and the 10 joined PLC channels (`mortarPumpFlow`, `pressure*`,
   `printHead*`, `rollerband*`, `viscoPump*`).

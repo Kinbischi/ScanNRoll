@@ -23,6 +23,7 @@ from profileProcessingAlgorithms import (
     width_from_filament_edges,
     width_from_smoothed_slope,
 )
+from segmentShape import measure_segment_shape
  
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -99,6 +100,10 @@ def main() -> None:
     # inter-profile distances, which depend on rollerbandSpeed — only populated by the PLC join above.
     measure_filament_volume(profiles)  # -> segmentVolume, sliceVolume
     measure_run_lengths(profiles)      # -> segmentLength (filament runs), defectLength (pure-floor runs)
+    # Per-segment shape (thinning / startup / rupture) along the print path; needs the cleaned segments
+    # and the physical spacing, so it runs here alongside the other run-based measures.
+    measure_segment_shape(profiles)    # -> segment{TaperFrac,TaperMonotonicity,CriticalArea,CriticalWidth,
+                                       #    RuptureLength,HeadOvershoot,SettleLength,Ruptures}
 
     save_profiles(profiles, PROCESSED_FILE, kind="processed", source_file=RAW_FILE,
                   raw_start=raw_start, raw_end=raw_end,
