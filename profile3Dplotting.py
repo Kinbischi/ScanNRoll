@@ -27,10 +27,12 @@ FEATURE_DISPLAY = {
     "defectLength":     ("defectLength",  0.01, "mm"),
     # Per-profile 0/1 flags (share one 0-1 colour group; 1 = filament/segment -> same high colour):
     # `isSegment` = part of a cleaned filament segment (clean_flat_runs), `isNotFlat` = raw "has filament
-    # points" (inverse of isFlat). View over ALL points (`plot_feature_heatmap(..., category=None)`) so
-    # bridged floor-only gaps are visible.
+    # points" (inverse of isFlat), `isContinuousFilament` = an isSegment run too long to be a discrete segment
+    # (classify_continuous_filaments; excluded from shape analysis). View over ALL points
+    # (`plot_feature_heatmap(..., category=None)`) so bridged floor-only gaps are visible.
     "isSegment":        ("segFlag", 1.0, ""),
     "isNotFlat":        ("segFlag", 1.0, ""),
+    "isContinuousFilament": ("segFlag", 1.0, ""),
     # Per-segment shape features (measure_segment_shape), broadcast over the segment. Already in physical
     # units (factor 1.0), each its own colour group. NaN off a rupture / on a too-short segment.
     "segmentBodyThinning":         ("segmentBodyThinning", 1.0, "%/mm"),
@@ -39,16 +41,40 @@ FEATURE_DISPLAY = {
     "segmentRuptureLength":     ("segmentRuptureLength", 1.0, "mm"),
     "segmentHeadOvershoot":     ("segmentHeadOvershoot", 1.0, "%"),
     "segmentRuptures":          ("segmentRuptures", 1.0, ""),
-    "segmentSection":           ("segmentSection", 1.0, ""),   # per-profile phase code (0/1/2); debug view
+    "segmentSection":           ("segmentSection", 1.0, ""),   # per-profile phase code (1/2/3); debug view
+    "segmentShapeStatus":       ("segmentShapeStatus", 1.0, ""),  # per-segment sort-out reason (0-6); debug view
     # PLC machine-log channels (joined by timestamp) + derived ones (e.g. pipePressureDifference):
     # each its own colour group, since their magnitudes differ widely. Shown in the PLC's native
     # engineering units (factor 1.0; the unit label is left blank as the units aren't recorded in the CSV).
     **{name: (name, 1.0, "") for name in ALL_PLC_COLUMNS},
 }
 
+# Discrete/categorical features: their values are CODES for distinct categories, not a continuous scale, so
+# they are drawn with a distinct-colour (categorical) colormap + a checkbox panel instead of the gradient
+# colour bar (a viridis ramp over the codes would imply a false ordering). Map: feature -> {code: label}.
+# Codes are assumed contiguous (lo..hi); the palette below colours code `lo+i` with entry i.
+CATEGORICAL_FEATURES: dict[str, dict[int, str]] = {
+    "segmentShapeStatus":   {0: "kept", 1: "too short", 2: "continuous", 3: "degenerate",
+                             4: "tiny body", 5: "high width", 6: "no rupture"},
+    # Only `segmentShapeStatus` (the sort-out reason) uses the checkbox panel. The 0/1 flags (`isSegment`,
+    # `isNotFlat`, `isContinuousFilament`, `segmentRuptures`) and `segmentSection` (phase) keep the plain
+    # gradient rendering (viridis + colour bar), so they are intentionally NOT listed here.
+}
+# Distinct qualitative colours (RGB 0-1), one per category index; entry 0 (green) reads as the "normal" code
+# (segmentShapeStatus 0 = kept). Off-category points (NaN) render grey (the LUT's nan_color).
+_CATEGORICAL_PALETTE = [
+    (0.20, 0.63, 0.17), (0.89, 0.10, 0.11), (0.22, 0.49, 0.72), (1.00, 0.55, 0.00),
+    (0.60, 0.31, 0.64), (0.55, 0.34, 0.16), (0.95, 0.80, 0.20), (0.30, 0.75, 0.75),
+]
+# A categorical feature is shown with a checkbox panel (one toggle per code, coloured to match) in place of
+# the gradient colour bar; unchecking a code greys those points out (remapped to NaN in a companion mask
+# array). Slot j always represents the j-th code, so its fixed button colour = palette[j] for every feature.
+_CATMASK_SUFFIX = "__catmask"
+_MAX_CATEGORIES = max(len(v) for v in CATEGORICAL_FEATURES.values())
+
 # Heat-map colour-scale modes, cycled live by the scale button (see plottingClass._add_scale_button).
 # "linear" (default) keeps the full min-max range; the others tame an outlier that would otherwise
-# squash every smaller value into one end of the colormap.
+# squash every smaller value into one end of the colormap. (Ignored for CATEGORICAL_FEATURES.)
 _SCALE_MODES = ("linear", "log", "clip", "rank")
 CLIP_PERCENTILES = (2.0, 98.0)  # "clip" mode maps this percentile range to the colormap (outliers saturate)
 _RANK_SUFFIX = "__rank"          # per-feature companion array holding the [0, 1] dense rank (rank mode)
@@ -58,7 +84,8 @@ _RANK_SUFFIX = "__rank"          # per-feature companion array holding the [0, 1
 # filament points) so they are coloured over ALL points; every other feature colours the filament points.
 # `segmentSection` (the startup/body/rupture phase code) is coloured over ALL points too, so each segment's
 # phase bands show full-width in the print context (the off-segment floor is NaN = the NaN colour).
-_ALL_POINT_FEATURES = frozenset({"isSegment", "isNotFlat", "defectLength", "segmentSection"})
+_ALL_POINT_FEATURES = frozenset({"isSegment", "isNotFlat", "isContinuousFilament", "defectLength",
+                                 "segmentSection", "segmentShapeStatus"})
 
 
 def _feature_pointset(feature: str) -> "str | None":
@@ -89,7 +116,8 @@ SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
                  "segmentBodyThinning", "segmentBodyThinningStability",                      # body phase
                  "segmentRuptures", "segmentCriticalArea", "segmentRuptureLength",    # rupture phase
                  "segmentVolume", "segmentLength", "defectLength",                    # run aggregates
-                 "isSegment", "isNotFlat", "segmentSection")),                        # flags + debug
+                 "isSegment", "isNotFlat", "isContinuousFilament",                    # 0/1 flags
+                 "segmentSection", "segmentShapeStatus")),                            # per-segment debug codes
     ("PLC", ALL_PLC_COLUMNS),
 )
 
@@ -109,7 +137,9 @@ FEATURE_UI: dict[str, tuple[str, str]] = {
     "defectLength":             ("runs", "defect"),
     "isSegment":                ("flags", "isSeg"),
     "isNotFlat":                ("flags", "notFlat"),
-    "segmentSection":           ("flags", "phase"),
+    "isContinuousFilament":     ("flags", "contFil"),
+    "segmentSection":           ("debug", "phase"),      # per-profile phase code (1/2/3)
+    "segmentShapeStatus":       ("debug", "sortout"),    # per-segment sort-out reason (0-6)
 }
 # PLC channels are packed a few per row with short labels so the (many) channels don't overflow the panel.
 _PLC_LABEL: dict[str, str] = {
@@ -291,6 +321,7 @@ class plottingClass:
         self._build_feature_cloud(profiles, features, initial, cmap, point_size, profile_step, point_step)
         self._add_feature_selector()
         self._add_scale_selector()
+        self._add_category_selector()  # category-toggle checkboxes (shown only for a categorical feature)
 
     def _build_feature_cloud(self, profiles: list[profileData], features: tuple[str, ...],
                              initial: str, cmap: str, point_size: int,
@@ -311,7 +342,16 @@ class plottingClass:
         self._mappers: dict = {}
         self._actors: dict = {}
         self._feature_scale_clim: dict = {}
-        self._scalar_bar_ps = "<none>"  # which point set the single scalar bar is currently tied to
+        self._gradient_luts: dict = {}   # per point set: the original (viridis) LUT, restored for continuous features
+        self._cat_luts: dict = {}        # per categorical feature: a cached discrete LUT
+        self._scalar_bar_ps = "<none>"   # which point set the single scalar bar is currently tied to
+        self._visible_ps = "<none>"      # which point set's actor is currently visible
+        self._bar_active = False         # is the gradient colour bar currently shown
+        self._cat_buttons: list = []     # category-toggle checkbox widgets (built by _add_category_selector)
+        self._cat_labels: list = []      # their coloured text labels
+        self._cat_slot_codes: list = []  # code currently assigned to each checkbox slot (None = unused)
+        self._cat_hidden: set = set()    # category codes currently greyed out
+        self._cat_panel_active = False   # is the category checkbox panel currently shown
 
         by_pointset: dict = {}
         for f in features:
@@ -321,6 +361,7 @@ class plottingClass:
             if built is not None:
                 self._clouds[pointset], self._mappers[pointset], self._actors[pointset], scale_clim = built
                 self._feature_scale_clim.update(scale_clim)
+                self._gradient_luts[pointset] = self._mappers[pointset].lookup_table  # keep the gradient LUT
         if not self._clouds:
             return  # nothing to draw (e.g. every profile flat)
         if self._feature_pointset[initial] not in self._clouds:  # initial's cloud is empty -> pick a built one
@@ -385,40 +426,37 @@ class plottingClass:
             return f"{unit} (clip {lo:g}-{hi:g}%)".strip()
         return unit  # linear
 
-    def _set_feature_labels(self, feature: str, mode: str) -> None:
-        """Feature name at the top edge, and its unit + active scale mode centred just above the
-        horizontal colour bar (a separate text actor so it is not cramped against the bar's numbers)."""
-        self.plotter.add_text(feature, name="feature_title", position="upper_edge", font_size=16)
-        # anchor at the bar's centre (x = 0.50) with centred justification so the label stays centred
-        unit_actor = self.plotter.add_text(self._scale_label(feature, mode), name="feature_unit",
-                                           position=(0.50, 0.17), viewport=True, font_size=16)
-        unit_actor.GetTextProperty().SetJustificationToCentered()
-
     def _apply_scale(self, feature: str, mode: str) -> None:
-        """Colour `feature` with scale `mode` live: show its point-set cloud (swapping the visible actor
-        + re-tying the shared colour bar when the point set changes), pick the value/rank array, set the
-        log flag and colour range, relabel and re-render. A mode with no valid range (e.g. log on a
-        feature with no positive values) renders as linear, but the requested `mode` is kept so cycling
-        still advances."""
+        """Colour `feature` live. Continuous features use the viridis gradient + the shared colour bar with
+        the requested scale `mode` (linear/log/clip/rank; an unavailable mode renders linear but is kept so
+        cycling advances). Categorical features (CATEGORICAL_FEATURES) use a distinct-colour discrete LUT + a
+        checkbox panel instead, and the scale mode is ignored. Swaps the visible point-set actor on change."""
         self._active_feature = feature
         self._scale_mode = mode
         pointset = self._feature_pointset[feature]
         if pointset not in self._clouds:  # this feature's cloud is empty -> nothing to show
             return
         cloud, mapper = self._clouds[pointset], self._mappers[pointset]
-
-        if self._scalar_bar_ps != pointset:  # point set changed -> swap visible actor + re-tie the bar
+        if self._visible_ps != pointset:  # point set changed -> show only this cloud's actor
             for ps, actor in self._actors.items():
                 actor.SetVisibility(ps == pointset)
-            if self._scalar_bar_ps != "<none>":
-                self.plotter.remove_scalar_bar(title="")
-            self.plotter.add_scalar_bar(title="", mapper=mapper, label_font_size=14,
-                                        position_x=0.33, position_y=0.10, width=0.34, height=0.05)
-            self._scalar_bar_ps = pointset
+            self._visible_ps = pointset
 
+        self.plotter.add_text(feature, name="feature_title", position="upper_edge", font_size=16)
+        if feature in CATEGORICAL_FEATURES:
+            self._apply_categorical(feature, mapper)
+        else:
+            self._apply_gradient(feature, mode, cloud, mapper)
+        self.plotter.render()
+
+    def _apply_gradient(self, feature: str, mode: str, cloud, mapper) -> None:
+        """Continuous feature: the viridis gradient LUT + the shared colour bar, coloured by the value (or
+        rank) array with the mode's colour range and log flag."""
+        self._hide_category_panel()
+        mapper.lookup_table = self._gradient_luts[self._visible_ps]  # restore the gradient LUT
         clim = self._feature_scale_clim[feature][mode]
         render_mode = mode
-        if clim is None:  # mode unavailable for this feature -> fall back to linear for rendering
+        if clim is None:  # mode unavailable for this feature -> render linear (mode kept for cycling)
             render_mode = "linear"
             clim = self._feature_scale_clim[feature]["linear"]
         array = feature + _RANK_SUFFIX if render_mode == "rank" else feature
@@ -427,8 +465,131 @@ class plottingClass:
         mapper.lookup_table.log_scale = (render_mode == "log")
         if clim is not None:
             mapper.scalar_range = clim
-        self._set_feature_labels(feature, render_mode)
-        self.plotter.render()
+        self._ensure_scalar_bar(mapper)
+        self._set_unit_label(self._scale_label(feature, render_mode))
+
+    def _apply_categorical(self, feature: str, mapper) -> None:
+        """Categorical feature: a discrete distinct-colour LUT keyed by the integer code + a bottom-centre
+        checkbox panel (one toggle per category, coloured to match). Unchecking a category greys it out
+        (remapped to NaN in a companion mask array). The gradient colour bar is hidden."""
+        self._remove_scalar_bar()
+        items = sorted(CATEGORICAL_FEATURES[feature].items())  # [(code, label), ...]; codes contiguous
+        lo, hi = items[0][0], items[-1][0]
+        mapper.lookup_table = self._categorical_lut(feature, lo, hi, len(items))
+        mapper.scalar_range = (lo - 0.5, hi + 0.5)
+        self._cat_hidden = set()             # all categories visible on (re)entry
+        self._show_category_panel(feature)   # bottom-centre checkboxes + coloured labels
+        self._set_cat_mask()                 # point the cloud at the (initially full) masked scalar
+        self._set_unit_label("")             # the panel is the legend; clear the bar's unit text
+
+    def _categorical_lut(self, feature: str, lo: int, hi: int, n: int):
+        """A cached discrete LookupTable: `n` distinct colours over the code range [lo-0.5, hi+0.5], so each
+        integer code renders as one solid palette colour (index = code - lo)."""
+        if feature not in self._cat_luts:
+            from matplotlib.colors import ListedColormap
+            colors = [_CATEGORICAL_PALETTE[i % len(_CATEGORICAL_PALETTE)] for i in range(n)]
+            lut = pv.LookupTable(cmap=ListedColormap(colors), n_values=n)
+            lut.scalar_range = (lo - 0.5, hi + 0.5)
+            lut.nan_color = "lightgray"
+            self._cat_luts[feature] = lut
+        return self._cat_luts[feature]
+
+    def _ensure_scalar_bar(self, mapper) -> None:
+        """Show the shared gradient colour bar tied to `mapper` (re-tie if the point set changed or it was
+        hidden for a categorical feature)."""
+        if self._bar_active and self._scalar_bar_ps == self._visible_ps:
+            return
+        if self._bar_active:
+            self.plotter.remove_scalar_bar(title="")
+        self.plotter.add_scalar_bar(title="", mapper=mapper, label_font_size=14,
+                                    position_x=0.33, position_y=0.10, width=0.34, height=0.05)
+        self._scalar_bar_ps = self._visible_ps
+        self._bar_active = True
+
+    def _remove_scalar_bar(self) -> None:
+        """Hide the shared gradient colour bar (for a categorical feature)."""
+        if self._bar_active:
+            self.plotter.remove_scalar_bar(title="")
+            self._bar_active = False
+            self._scalar_bar_ps = "<none>"
+
+    # --- category checkbox panel (bottom-centre; shown only for a categorical feature) ---------------
+    def _cat_panel_x(self) -> int:
+        """Left x (pixels) of the bottom-centre category panel, tracking the current window width."""
+        return int(self.plotter.window_size[0]) // 2 - 64
+
+    def _show_category_panel(self, feature: str) -> None:
+        """Assign the active categorical feature's codes to the checkbox pool: position + label the first N
+        slots at bottom-centre and show them, parking the rest off-screen. No-op until the pool exists.
+        Slot j's fixed button colour is palette[j], so it already matches the j-th category's colour."""
+        if not self._cat_buttons:
+            return
+        items = sorted(CATEGORICAL_FEATURES[feature].items())
+        n, x, size = len(items), self._cat_panel_x(), self._cat_size
+        for j, (btn, lbl) in enumerate(zip(self._cat_buttons, self._cat_labels)):
+            if j < n:
+                code, label = items[j]
+                self._cat_slot_codes[j] = code
+                y = 12 + (n - 1 - j) * (size + 8)  # first code highest
+                btn.GetRepresentation().PlaceWidget([x, x + size, y, y + size, 0.0, 0.0])
+                btn.GetRepresentation().SetState(0 if code in self._cat_hidden else 1)
+                btn.GetRepresentation().SetVisibility(True)
+                btn.On()
+                lbl.SetInput(label)
+                lbl.SetPosition(x + size + 8, y + 4)
+                lbl.GetTextProperty().SetColor(*_CATEGORICAL_PALETTE[j % len(_CATEGORICAL_PALETTE)])
+                lbl.SetVisibility(True)
+            else:
+                self._cat_slot_codes[j] = None
+                self._hide_one_checkbox(btn, lbl)
+        self._cat_panel_active = True
+
+    @staticmethod
+    def _hide_one_checkbox(btn, lbl) -> None:
+        """Hide one checkbox + label: SetVisibility(False) on the button rep actually hides it (Off/SetEnabled
+        and an off-screen PlaceWidget both leave the rep drawn, clamped to (0,0)); Off() stops phantom clicks."""
+        btn.GetRepresentation().SetVisibility(False)
+        btn.Off()
+        lbl.SetVisibility(False)
+
+    def _hide_category_panel(self) -> None:
+        """Hide every category checkbox + label (for a continuous feature)."""
+        if not self._cat_buttons:
+            return
+        for btn, lbl in zip(self._cat_buttons, self._cat_labels):
+            self._hide_one_checkbox(btn, lbl)
+        self._cat_panel_active = False
+
+    def _set_cat_mask(self) -> None:
+        """Point the active categorical cloud at a masked scalar: hidden codes -> NaN (grey), the rest keep
+        their code (colour). No render (callers render)."""
+        feature = self._active_feature
+        pointset = self._feature_pointset[feature]
+        if pointset not in self._clouds:
+            return
+        cloud, mapper = self._clouds[pointset], self._mappers[pointset]
+        base = np.asarray(cloud[feature], dtype=float)
+        masked = np.where(np.isin(base, list(self._cat_hidden)), np.nan, base) if self._cat_hidden else base
+        cloud[feature + _CATMASK_SUFFIX] = masked
+        cloud.set_active_scalars(feature + _CATMASK_SUFFIX)
+        mapper.array_name = feature + _CATMASK_SUFFIX
+
+    def _make_cat_callback(self, slot: int):
+        """Click handler for one category checkbox: toggle whether that category's code is greyed out."""
+        def callback(state: bool) -> None:
+            code = self._cat_slot_codes[slot]
+            if code is None:
+                return
+            self._cat_hidden.discard(code) if state else self._cat_hidden.add(code)
+            self._set_cat_mask()
+            self.plotter.render()
+        return callback
+
+    def _set_unit_label(self, text: str) -> None:
+        """Centred text just above the colour bar (unit + scale mode for a gradient; empty for categorical)."""
+        actor = self.plotter.add_text(text, name="feature_unit", position=(0.50, 0.17),
+                                       viewport=True, font_size=16)
+        actor.GetTextProperty().SetJustificationToCentered()
 
     def _set_feature(self, feature: str) -> None:
         """Switch the active feature, re-applying the currently-selected colour-scale mode."""
@@ -554,9 +715,35 @@ class plottingClass:
             widget.GetRepresentation().PlaceWidget([x, x + size, y, y + size, 0.0, 0.0])
             actor.SetPosition(x + size + 8, y + 4)
 
+    def _add_category_selector(self, size: int = 26) -> None:
+        """Create the reusable pool of category-toggle checkboxes (bottom-centre, one per category code, up
+        to `_MAX_CATEGORIES`). All are parked off-screen; `_show_category_panel` positions + labels the ones
+        the active categorical feature needs. Slot j's button colour is fixed to palette[j] (so it always
+        matches the j-th category). Needs a live interactor, so it runs after the cloud + other selectors."""
+        self._cat_size = size
+        self._cat_buttons = []
+        self._cat_labels = []
+        self._cat_slot_codes = [None] * _MAX_CATEGORIES
+        for j in range(_MAX_CATEGORIES):
+            widget = self.plotter.add_checkbox_button_widget(
+                self._make_cat_callback(j), value=True,
+                position=(-100.0, -100.0), size=size,
+                color_on=_CATEGORICAL_PALETTE[j % len(_CATEGORICAL_PALETTE)], color_off="darkgray")
+            self._cat_buttons.append(widget)
+            # shadow so the colour-matched label stays legible where it overlaps a same-colour segment
+            lbl = self.plotter.add_text("", position=(-100, -100), font_size=11, shadow=True)
+            lbl.SetVisibility(False)
+            self._cat_labels.append(lbl)
+        self._hide_category_panel()  # park the pool off-screen (else the creation position clamps to 0,0)
+        if self._active_feature in CATEGORICAL_FEATURES:  # initial feature is categorical -> show + mask now
+            self._show_category_panel(self._active_feature)
+            self._set_cat_mask()
+
     def _on_window_resize(self, *args) -> None:
-        """ConfigureEvent handler: keep the scale group pinned to the bottom-right corner."""
+        """ConfigureEvent handler: keep the bottom-anchored selectors pinned as the window resizes."""
         self._reposition_scale_selector()
+        if self._cat_panel_active:  # re-centre the category panel at the new width
+            self._show_category_panel(self._active_feature)
         self.plotter.render()
 
     def _make_scale_callback(self, mode: str, idx: int):

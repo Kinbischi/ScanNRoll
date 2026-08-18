@@ -63,11 +63,13 @@ pl.show()
 
 
 # %% 3D heat-map — one plot for ALL features; auto-switches filament-only ↔ all points per feature   (needs a reprocessed cache)
-# geometry + PLC colour the filament points; defectLength, the isSegment/isNotFlat flags, and the
-# segmentSection phase code (0 startup / 1 body / 2 rupture — the debug view) colour all points.
+# geometry + PLC colour the filament points; defectLength, the isSegment/isNotFlat/isContinuousFilament flags,
+# the segmentSection phase code (1 body / 2 rupture / 3 peak), and segmentShapeStatus (0 kept / 1-6 sort-out
+# reason) colour all points — both per-segment debug views.
 HEATMAP_FEATURES = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace",
-                    "segmentVolume", "sliceVolume", "segmentLength", "defectLength", "isSegment", "isNotFlat",
-                    *SEGMENT_SHAPE_FEATURES, "segmentSection")
+                    "segmentVolume", "sliceVolume", "segmentLength", "defectLength",
+                    "isSegment", "isNotFlat", "isContinuousFilament",
+                    *SEGMENT_SHAPE_FEATURES, "segmentSection", "segmentShapeStatus")
 pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
 pl.plot_feature_heatmap(processed, features=HEATMAP_FEATURES + ALL_PLC_COLUMNS,
                         initial="widthOuter", profile_step=PROFILE_STEP, point_step=POINT_STEP)
