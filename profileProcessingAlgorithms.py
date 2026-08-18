@@ -202,6 +202,11 @@ PROFILE_UNITS_TO_MM = 0.01         # 1 profile unit = 0.01 mm
 # Morphological cleanup of the filament/floor run structure (clean_flat_runs), thresholds in physical mm.
 SEGMENT_MERGE_GAP_MM = 5.0     # pure-floor gaps shorter than this between two segments are bridged (filled)
 MIN_SEGMENT_LENGTH_MM = 10.0   # filament segments shorter than this (after bridging) are dropped to floor
+# A cleaned segment run longer than this is a *continuous filament* (an uninterrupted print), not a discrete
+# segment with a startup/body/rupture life. Flagged separately (classify_continuous_filaments) and excluded
+# from the per-segment shape analysis. Chosen from the data: the two longest runs (822 mm, 4242 mm) sit well
+# above the next (454 mm), so 600 mm cleanly splits them off. The old features (length/volume) keep all runs.
+MAX_SEGMENT_LENGTH_MM = 600.0
 
 def profile_advance_distances(profiles: list[profileData]) -> np.ndarray:
     """Per-profile along-path advance (profile units) from rollerbandSpeed (m/s) x inter-profile dt.
@@ -350,6 +355,26 @@ def clean_flat_runs(profiles: list[profileData],
 
     for p, s in zip(profiles, seg):
         p.isSegment = bool(s)
+
+def classify_continuous_filaments(profiles: list[profileData],
+                                  max_segment_mm: float = MAX_SEGMENT_LENGTH_MM) -> None:
+    """Label over-long segment runs as continuous filament, writing the per-profile `isContinuousFilament`
+    flag (True inside an `isSegment` run whose along-path length exceeds `max_segment_mm`, False elsewhere).
+
+    A continuous filament is an uninterrupted print with no single startup/body/rupture life, so it is a
+    different object from a discrete segment; the per-segment shape analysis skips it. This is an *additional*
+    label on top of `isSegment` (which is left unchanged, so the length/volume run measures still cover every
+    run). Run after `clean_flat_runs`; needs the PLC-joined physical spacing (`profile_advance_distances`).
+    """
+    for p in profiles:
+        p.isContinuousFilament = False
+    if not profiles:
+        return
+    dist = profile_advance_distances(profiles)
+    for run in _contiguous_runs(_segment_mask(profiles)):
+        if float(np.sum(dist[run])) * PROFILE_UNITS_TO_MM > max_segment_mm:
+            for i in run:
+                profiles[i].isContinuousFilament = True
 
 def translate_floor_to_zero(profiles: list[profileData]):
     for p in profiles:

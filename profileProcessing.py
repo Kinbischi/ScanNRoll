@@ -12,6 +12,7 @@ from profileLoading import count_profiles, load_profiles, save_profiles
 from profilePointsClass import profileData
 from profileProcessingAlgorithms import (
     categorize_floor_points,
+    classify_continuous_filaments,
     clean_flat_runs,
     flag_flat_profiles,
     grow_profile_points,
@@ -95,15 +96,18 @@ def main() -> None:
     # sub-10 mm filament blips from the noisy per-profile categorisation. Needs physical distances
     # (rollerbandSpeed, from the join), so it runs here — before the run-based measures below.
     clean_flat_runs(profiles)
+    # Label over-long segment runs as continuous filament (not discrete segments); shape analysis skips them.
+    classify_continuous_filaments(profiles)  # -> isContinuousFilament
 
     # Filament-segment volume runs here (not in process_profiles) because it needs the physical
     # inter-profile distances, which depend on rollerbandSpeed — only populated by the PLC join above.
     measure_filament_volume(profiles)  # -> segmentVolume, sliceVolume
     measure_run_lengths(profiles)      # -> segmentLength (filament runs), defectLength (pure-floor runs)
     # Per-segment shape (thinning / startup / rupture) along the print path; needs the cleaned segments
-    # and the physical spacing, so it runs here alongside the other run-based measures.
-    measure_segment_shape(profiles)    # -> segment{TaperFrac,TaperMonotonicity,CriticalArea,CriticalWidth,
-                                       #    RuptureLength,HeadOvershoot,SettleLength,Ruptures}
+    # and the physical spacing, so it runs here alongside the other run-based measures. Analyses only
+    # discrete segments (SEGMENT_SHAPE_MIN_LENGTH_MM <= length <= MAX_SEGMENT_LENGTH_MM).
+    measure_segment_shape(profiles)    # -> segmentBodyThinning, segmentBodyThinningStability, segmentCriticalArea,
+                                       #    segmentRuptureLength, segmentHeadOvershoot, segmentRuptures, segmentSection
 
     save_profiles(profiles, PROCESSED_FILE, kind="processed", source_file=RAW_FILE,
                   raw_start=raw_start, raw_end=raw_end,

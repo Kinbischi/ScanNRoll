@@ -22,6 +22,7 @@ class profileData:
     heightSmooth: Optional[float] = None   # robust filament height (max of median-smoothed z above z=0)
     isFlat: Optional[bool] = None          # raw per-profile flag: True = no filament points (== floorMask.all())
     isSegment: Optional[bool] = None       # cleaned run flag: True = part of a real filament segment (see clean_flat_runs)
+    isContinuousFilament: Optional[bool] = None  # True = an isSegment run too long to be a discrete segment (see classify_continuous_filaments); excluded from segment-shape analysis
     flatness: Optional[float] = None
     areaSimpson: Optional[float] = None    # filament cross-section, Simpson integration (profile-unit^2)
     areaShoelace: Optional[float] = None   # filament cross-section, shoelace polygon (profile-unit^2)
@@ -41,6 +42,7 @@ class profileData:
     segmentHeadOvershoot: Optional[float] = None    # startup bulge height over the body level (%)
     segmentRuptures: Optional[float] = None         # 1.0 if the segment ended in a rupture, else 0.0
     segmentSection: Optional[float] = None          # per-profile phase flag (1 body, 2 rupture, 3 peak; else NaN); heat-map debug
+    segmentShapeStatus: Optional[float] = None       # per-segment sort-out reason for the shape analysis: 0 kept, 1 too short, 2 continuous filament, 3 degenerate, 4 tiny body, 5 high width change, 6 didn't rupture; heat-map debug
     maxSmoothedHeight: Optional[float] = None
     maxSmoothedPlace: Optional[int] = None
     maxHeight: Optional[float] = None

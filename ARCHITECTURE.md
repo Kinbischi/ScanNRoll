@@ -161,7 +161,11 @@ bridging gaps shorter than `SEGMENT_MERGE_GAP_MM` (5 mm) and dropping segments s
 removed (Exp1: 182 → 120 segments). It writes the cleaned result to a **dedicated `isSegment` flag**
 (starting from `~isFlat`), leaving the raw `isFlat` (= "no filament points", a `floorMask` summary)
 untouched — the two concepts stay separate. It must run here because it, too, needs the physical
-distances. Finally `measure_filament_volume` + `measure_run_lengths` (`profileProcessingAlgorithms`) and
+distances. `classify_continuous_filaments` then labels over-long `isSegment` runs (length
+> `MAX_SEGMENT_LENGTH_MM`, 600 mm) as a **continuous filament** (`isContinuousFilament`) — an uninterrupted
+print, distinct from a discrete segment and excluded from the shape analysis below; `isSegment` itself is
+left unchanged, so the length/volume measures still cover every run. Finally `measure_filament_volume` +
+`measure_run_lengths` (`profileProcessingAlgorithms`) and
 `measure_segment_shape` (`segmentShape`) run — also outside `process_profiles`, because they need the
 physical inter-profile distances (`profile_advance_distances`, from `rollerbandSpeed`, populated only by
 the join) — measuring the cleaned runs (segments = runs of `isSegment` via `_segment_mask`).
@@ -175,10 +179,19 @@ the print path — a **startup** ramp → overshoot bulge, a **body** plateau (s
 **abrupt terminal rupture** — broadcasting six per-segment values: `segmentBodyThinning` (%/mm) +
 `segmentBodyThinningStability` (thinning), `segmentCriticalArea` + `segmentRuptureLength` (rupture, at the
 derivative-cliff **rupture start**; NaN unless the segment ended thin per the `segmentRuptures` 0/1 gate),
-and `segmentHeadOvershoot` (startup). The **body** is the plateau where the smoothed area stays within a
-±band of `bodyLevel` — from where the ramp settles in to where it leaves the band before the cliff — and
-the taper is fit there, so the per-profile `segmentSection` flag (1 body / 2 rupture / 3 overshoot-peak
-band; the start ramp + the body↔rupture shoulder are NaN) faithfully shows exactly what the features use.
+and `segmentHeadOvershoot` (startup). Only **discrete** segments are analysed — length in
+[`SEGMENT_SHAPE_MIN_LENGTH_MM` (50 mm), `MAX_SEGMENT_LENGTH_MM` (600 mm)]; shorter ones give a noisy taper,
+longer ones are continuous filaments (above). The **body** is the plateau where the smoothed area stays
+within a ±band of `bodyLevel` — from where the ramp settles in to where it leaves the band, held a few mm
+(`SEGMENT_BODY_RUPTURE_MARGIN_MM`) back from the cliff / segment end so the pre-rupture roll-off stays out of
+the fit — and the taper is fit there, so the per-profile `segmentSection` flag (1 body / 2 rupture /
+3 overshoot-peak band; the start ramp + the body↔rupture shoulder are NaN) faithfully shows exactly what the
+features use. Weird segments are **sorted out** of the shape analysis (their thinning features stay NaN, so
+they drop from the plots) with a visible reason in `segmentShapeStatus` (0 kept; 1 too short; 2 continuous
+filament; 3 degenerate; 4 tiny body — a too-short plateau that otherwise gives a wild taper; 5 high width
+change — a turbulent/spreading bead whose area taper misleads; 6 didn't rupture). `segmentRuptures` is kept
+even on a sorted-out segment so the rupture *rate* survives; the sort-out is shape-analysis only
+(length/volume/defect keep every run).
 
 The plot workbench (`dataAnalysis.py`) draws floor vs filament in two colours (`category=`), flat
 profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
@@ -187,14 +200,21 @@ profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` referen
 panel (`plot_feature_heatmap`; the feature buttons are grouped under Geometry / Segment / PLC headers).
 Because features live on different point sets, the heat-map **prebuilds one cloud per point set**
 (`_feature_pointset`): filament geometry + PLC channels colour the **filament**
-points, while `defectLength` and the `isSegment` / `isNotFlat` flags (which sit on floor/gap profiles)
-colour **all** points. Switching within a point set only repoints the mapper (instant); crossing point
+points, while `defectLength` and the `isSegment` / `isNotFlat` / `isContinuousFilament` flags (which sit on
+floor/gap profiles) colour **all** points. Switching within a point set only repoints the mapper (instant); crossing point
 sets swaps which cloud is drawn (filament-only ↔ all) while keeping the camera, and a single shared
 colour bar is re-tied to the active cloud. Selectable features include the geometry measures (width /
 height / area, grouped and shown in mm / mm²), the two filament-segment volumes (`segmentVolume` /
 `sliceVolume`, in cm³), the run lengths (`segmentLength` / `defectLength` in mm), the 0/1 segment flags,
 and each joined PLC channel — set by `FEATURE_DISPLAY` in `profile3Dplotting.py`. A bottom-right radio
-group switches the colour scale (linear / log / clip / rank) live.
+group switches the colour scale (linear / log / clip / rank) live. **`segmentShapeStatus`** (the only member
+of `CATEGORICAL_FEATURES`) is drawn with a distinct-colour discrete colormap instead of the gradient bar
+(its values are sort-out reason codes, not a scale). In place of the colour bar a bottom-centre **checkbox
+panel** appears — one colour-matched toggle per category (`_add_category_selector`); unchecking a category
+**greys those points out** (a companion NaN-mask array), so you can isolate e.g. just the tiny-body
+segments, and the scale-mode group is ignored. All the other code features — `segmentSection` (phase) and the
+0/1 flags (`isSegment` / `isNotFlat` / `isContinuousFilament` / `segmentRuptures`) — keep the plain gradient
+rendering (viridis + colour bar).
 
 For comparing features against each other (rather than one at a time in space),
 `featureComparison.compare_features` (matplotlib) plots several as time series on one axis. When **two or
@@ -311,10 +331,13 @@ reads instead of ~N tiny per-group reads (measured **~142 s → ~5 s** on the 90
   (pure-floor-run length; unset on non-flat), the six per-segment **shape** features
   (`segmentBodyThinning`, `segmentBodyThinningStability`, `segmentCriticalArea`, `segmentRuptureLength`,
   `segmentHeadOvershoot`, `segmentRuptures`; broadcast per segment, NaN off a rupture / on a too-short
-  segment — `segmentCriticalArea` is the cross-section at the rupture start) plus `segmentSection`
-  (per-profile phase flag
-  1/2/3 = body/rupture/overshoot-peak, NaN elsewhere; a heat-map debug view), `isFlat` (raw "no filament points"), `isSegment`
-  (cleaned "part of a real filament segment", from `clean_flat_runs`), `flatness` (line-fit RMS residual; unset for
+  segment or a continuous filament — `segmentCriticalArea` is the cross-section at the rupture start) plus
+  `segmentSection` (per-profile phase flag
+  1/2/3 = body/rupture/overshoot-peak, NaN elsewhere; a heat-map debug view), `segmentShapeStatus` (per-segment
+  shape-analysis sort-out reason 0-6: 0 kept / 1 too short / 2 continuous / 3 degenerate / 4 tiny body /
+  5 high width change / 6 didn't rupture; a heat-map debug view), `isFlat` (raw "no filament points"), `isSegment`
+  (cleaned "part of a real filament segment", from `clean_flat_runs`), `isContinuousFilament` (an `isSegment`
+  run too long to be a discrete segment, from `classify_continuous_filaments`), `flatness` (line-fit RMS residual; unset for
   the default floor-based flat method), `arrivalTime` (absolute Unix capture time), `sensorTime` (sensor clock
   seconds, for inter-profile dt), and the 10 joined PLC channels (`mortarPumpFlow`, `pressure*`,
   `printHead*`, `rollerband*`, `viscoPump*`).

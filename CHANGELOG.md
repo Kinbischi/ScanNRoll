@@ -29,6 +29,63 @@ This project does not yet use formal version numbers; changes accumulate under
   index would overflow int64). Cuts the overlay cell's two voxel passes from ~13 s to ~2.5 s.
 
 ### Changed
+- **`segmentShapeStatus` gets a distinct-colour scheme + an interactive checkbox panel in the heat map.** The
+  `CATEGORICAL_FEATURES` registry (`profile3Dplotting.py`) maps `segmentShapeStatus` (0-6 sort-out reasons) to
+  `{code: label}`; when it is the active feature the cloud is coloured by a **discrete distinct-colour LUT**
+  (one solid palette colour per code, off-category points grey) and the gradient colour bar is replaced by a
+  bottom-centre **checkbox panel**: one colour-matched toggle per category (a reusable widget pool,
+  `_add_category_selector`), each with a shadowed label. **Unchecking a category greys those segments out** (a
+  companion NaN-mask scalar), so you can isolate e.g. just the tiny-body segments. The scale-mode group
+  (linear/log/clip/rank) is ignored for it. Every other feature — including `segmentSection` (phase) and the
+  0/1 flags (`isSegment` / `isNotFlat` / `isContinuousFilament` / `segmentRuptures`) — keeps the plain viridis
+  gradient + colour bar (e.g. phase head/peak = yellow). Fixes the misleading "7 shades of viridis" rendering
+  of the multi-code sort-out feature, where the gradient falsely implied an ordering. Verified headless
+  (gradient↔categorical switches, panel build, grey-out toggle, stray-widget hiding, screenshots).
+- **Unified, visible sort-out of weird segments from the shape analysis (`segmentShapeStatus`).** Every
+  `isSegment` run now carries a per-segment status code — 0 kept, or the reason it was sorted out of the
+  thinning analysis: 1 too short (< 50 mm), 2 continuous filament (> 600 mm), 3 degenerate (no body),
+  **4 tiny body** (plateau < `MIN_BODY_LENGTH_MM` = 15 mm — catches a degenerate 5 mm-body segment that
+  otherwise reported a wild **+5.9 %/mm** taper), **5 high width change** (outer width swings >
+  `WIDTH_CHANGE_MAX_FRAC` = 40 % of the body width across the body — a turbulent/spreading bead whose
+  area-based taper misleads, e.g. the 2×-wide-but-flat pancaking segment), 6 didn't rupture. A sorted-out
+  segment's 5 thinning/shape features + `segmentSection` become `None` (so it drops from the stepwise boxes),
+  but `segmentRuptures` is **kept** on every valid-body segment so the rupture *rate* isn't lost. The status
+  is a heat-map debug view (grouped in a new Segment "debug" row alongside `segmentSection`); the sort-out is
+  **shape-analysis only** — `segmentLength` / `segmentVolume` / `defectLength` still cover every run. On Exp1:
+  107 kept, sorted out 4 too-short / 2 continuous / 1 tiny-body / 2 high-width / 4 didn't-rupture; kept-taper
+  range tightens from [−0.43, **+5.89**] to [−0.43, +0.37] %/mm. **Reprocess to apply.**
+- **Body starts earlier for segments without a head overshoot (`_settle_index`).** The settle search used to
+  pick the "overshoot peak" as the `argmax` over the whole first half of the segment and start the body
+  *after* it, so a mid-segment spike or a broad dome peak shoved `body_start` late (e.g. to 0.50·L). It now
+  only skips past a *prominent leading* overshoot — a bulge more than the ±band above the body level within
+  the first `HEAD_OVERSHOOT_FRAC` (0.25) of the segment; otherwise the body starts at the first sustained
+  band entry. No/little-overshoot segments' `body_start` drops from a median 0.39·L to 0.12·L (worst case
+  0.50→0.36); genuine-overshoot segments are untouched (median |taper change| 0.000, Spearman old↔new 0.82).
+  Domed segments (rise to a broad mid-peak, then decline) now span the whole dome, so ~7 of them flip from a
+  small negative taper to ~0/positive — the honest reading (a dome has no net thinning; see
+  `segmentBodyThinningStability`). **Reprocess to apply.**
+- **Segment-shape analysis now gated to discrete segments, with the body held back from the rupture.**
+  Three tuning changes to `measure_segment_shape` (`segmentShape.py`), driven by a read-only study of the
+  120 Exp1 segments:
+  - **Length gating in mm** replaces the old `MIN_SEGMENT_PROFILES = 40` profile-count cutoff. A segment is
+    shape-analysed only if its arc-length is in [`SEGMENT_SHAPE_MIN_LENGTH_MM` = 50 mm,
+    `MAX_SEGMENT_LENGTH_MM` = 600 mm]. The profile-count cutoff was speed-dependent and let 11 mm segments
+    through at low speed (a −3.4 %/mm taper outlier); the mm floor removes the noisy short segments (taper
+    range tightens from [−3.38, +0.78] to [−0.43, +0.46] %/mm). The 600 mm ceiling excludes the two longest
+    runs (822 mm, 4242 mm), which also **fixes a latent `MemoryError`**: `scipy.stats.theilslopes` is O(n²)
+    in memory and would try to allocate 3.24 GiB on the 4242 mm (20 838-point) body during reprocessing.
+  - **`classify_continuous_filaments`** (`profileProcessingAlgorithms.py`) labels those over-long runs as a
+    **continuous filament** in a new cached `isContinuousFilament` flag — a distinct object from a discrete
+    segment (uninterrupted print, no single startup/rupture), excluded from the shape analysis and available
+    for future continuous-filament features. `isSegment` is unchanged, so `segmentLength` / `segmentVolume` /
+    `defectLength` still cover every run. Viewable in the heat map (grouped in the Segment "flags" row).
+  - **Body-border pushback**: `body_end` is now held `SEGMENT_BODY_RUPTURE_MARGIN_MM` (3 mm) before the
+    rupture cliff top (or the segment end on a non-rupturing segment), so the pre-rupture roll-off stays out
+    of the taper fit (previously the body could touch the cliff top or run to the last profile). Cleans 43 of
+    114 segments (the cliff-huggers) with no starved bodies.
+
+  **Reprocess (`python profileProcessing.py`)** to populate `isContinuousFilament` and the re-gated segment
+  fields; the segment-shape values change slightly and short/continuous runs now read NaN there.
 - **Renamed the method-ambiguous geometry fields to `<measure><Method>`** so a name says how it was
   computed: `width`→`widthFlank` (smoothed-slope flank feet) + `peaks`→`widthFlankIdx`;
   `filamentWidth`→`widthOuter` (outer filament points) + `filamentWidthIdx`→`widthOuterIdx`;
