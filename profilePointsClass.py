@@ -35,8 +35,15 @@ class profileData:
     # Describe the thinning / startup / rupture of the filament along the print path; stored in physical
     # units (mm, mm^2, %/mm, %, dimensionless). NaN where a phase is absent (e.g. rupture fields on a
     # segment that ended thick); None off-segment or on a too-short segment.
-    segmentBodyThinning: Optional[float] = None        # body thinning rate (%/mm; negative = thinning)
-    segmentBodyThinningStability: Optional[float] = None  # steadiness of the thinning (Spearman area vs arc-length, -1..1)
+    # Body thinning family: the same taper measured on three signals over the body plateau — area
+    # (areaShoelace), width (widthOuter) and height (heightP95). Each is a rate (%/mm; negative = thinning)
+    # plus a steadiness (Spearman of the signal vs arc-length over the body, -1..1; -1 = steadily thinning).
+    segmentBodyAreaThinning: Optional[float] = None       # body AREA thinning rate (%/mm; negative = thinning)
+    segmentBodyAreaSteadiness: Optional[float] = None     # steadiness of the area thinning (Spearman area vs arc-length, -1..1)
+    segmentBodyWidthThinning: Optional[float] = None      # body WIDTH (widthOuter) thinning rate (%/mm; negative = narrowing)
+    segmentBodyWidthSteadiness: Optional[float] = None    # steadiness of the width thinning (Spearman width vs arc-length, -1..1)
+    segmentBodyHeightThinning: Optional[float] = None     # body HEIGHT (heightP95) thinning rate (%/mm; negative = flattening)
+    segmentBodyHeightSteadiness: Optional[float] = None   # steadiness of the height thinning (Spearman height vs arc-length, -1..1)
     segmentCriticalArea: Optional[float] = None     # cross-section at the rupture start / cliff top (mm^2)
     segmentRuptureLength: Optional[float] = None    # arc-length of the terminal rupture cliff (mm; short = abrupt)
     segmentHeadOvershoot: Optional[float] = None    # startup bulge height over the body level (%)

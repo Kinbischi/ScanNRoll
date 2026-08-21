@@ -106,7 +106,7 @@ def main() -> None:
     # Per-segment shape (thinning / startup / rupture) along the print path; needs the cleaned segments
     # and the physical spacing, so it runs here alongside the other run-based measures. Analyses only
     # discrete segments (SEGMENT_SHAPE_MIN_LENGTH_MM <= length <= MAX_SEGMENT_LENGTH_MM).
-    measure_segment_shape(profiles)    # -> segmentBodyThinning, segmentBodyThinningStability, segmentCriticalArea,
+    measure_segment_shape(profiles)    # -> segmentBody{Area,Width,Height}{Thinning,Steadiness}, segmentCriticalArea,
                                        #    segmentRuptureLength, segmentHeadOvershoot, segmentRuptures, segmentSection
 
     save_profiles(profiles, PROCESSED_FILE, kind="processed", source_file=RAW_FILE,

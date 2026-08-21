@@ -30,9 +30,13 @@ matches exactly what the features use). Along one segment:
   - The start ramp and the body->rupture shoulder are NOT used by any feature -> left unclassified.
 
 THE FEATURES (broadcast onto every profile of the segment, like segmentVolume; physical units):
-  - `segmentBodyThinning` (%/mm)          Theil-Sen slope of S over the BODY plateau, / bodyLevel x100
-                                          (negative = thinning). Robust median-slope fit.
-  - `segmentBodyThinningStability` (-1..1) Spearman(S, s) over the body: -1 = steadily thinning, ~0 = wavy.
+  - body thinning family                  the same taper measured on THREE body signals — area (S =
+                                          areaShoelace), width (widthOuter) and height (heightP95):
+      `segmentBodyAreaThinning`  / `...WidthThinning`  / `...HeightThinning`  (%/mm)
+                                          Theil-Sen slope of the signal over the BODY plateau, / its body
+                                          level x100 (negative = thinning). Robust median-slope fit.
+      `segmentBodyAreaSteadiness`/ `...WidthSteadiness`/ `...HeightSteadiness` (-1..1)
+                                          Spearman(signal, s) over the body: -1 = steadily thinning, ~0 = wavy.
   - `segmentHeadOvershoot` (%)            peak of the start ramp over bodyLevel = the initial bulge height.
   - `segmentCriticalArea` (mm^2)          S at rupture_start = the cross-section at which failure begins
                                           (a lower bound: the last cross-section still detected as filament).
@@ -111,8 +115,11 @@ _SECTION_BODY, _SECTION_RUPTURE, _SECTION_PEAK = 1.0, 2.0, 3.0
 _STATUS_KEPT, _STATUS_TOO_SHORT, _STATUS_CONTINUOUS = 0.0, 1.0, 2.0
 _STATUS_DEGENERATE, _STATUS_TINY_BODY, _STATUS_HIGH_WIDTH, _STATUS_NO_RUPTURE = 3.0, 4.0, 5.0, 6.0
 
-_SEGMENT_SHAPE_FIELDS = ("segmentBodyThinning", "segmentBodyThinningStability", "segmentCriticalArea",
-                         "segmentRuptureLength", "segmentHeadOvershoot", "segmentRuptures")
+_SEGMENT_SHAPE_FIELDS = ("segmentBodyAreaThinning", "segmentBodyAreaSteadiness",
+                         "segmentBodyWidthThinning", "segmentBodyWidthSteadiness",
+                         "segmentBodyHeightThinning", "segmentBodyHeightSteadiness",
+                         "segmentCriticalArea", "segmentRuptureLength", "segmentHeadOvershoot",
+                         "segmentRuptures")
 
 def _median_smooth(y: np.ndarray, window: int) -> np.ndarray:
     """Centred nan-aware median filter (window in samples): each output is the median of the finite
@@ -184,17 +191,32 @@ def _rupture_start(s: np.ndarray, A: np.ndarray) -> "int | None":
         k -= 1
     return k
 
-def _segment_shape_values(s: np.ndarray, A: np.ndarray, W: np.ndarray
+def _thinning_pair(sig: np.ndarray, s: np.ndarray, idx: np.ndarray, level: float) -> "tuple[float, float]":
+    """(thinning rate %/mm, steadiness) of one signal over the body indices `idx`, normalised by `level`.
+
+    Thinning = Theil-Sen slope of `sig` vs arc-length `s` over `idx`, / `level` x100 (negative = thinning).
+    Steadiness = Spearman(`sig`, `s`) over the same points (-1 = steadily thinning, ~0 = wavy). Both NaN if
+    fewer than 5 finite samples or `level` is non-positive. Used identically for area / width / height.
+    """
+    j = idx[np.isfinite(sig[idx])]
+    if j.size < 5 or not np.isfinite(level) or level <= 0:
+        return np.nan, np.nan
+    thin = 100.0 * float(theilslopes(sig[j], s[j])[0]) / level
+    r = spearmanr(s[j], sig[j])[0]
+    return thin, (float(r) if np.isfinite(r) else np.nan)
+
+def _segment_shape_values(s: np.ndarray, A: np.ndarray, W: np.ndarray, H: np.ndarray
                           ) -> "tuple[float, float | None, dict | None, np.ndarray | None]":
-    """Compute the per-segment shape features (and sort-out status) from the smoothed area signal A(s)
-    and outer-width signal W(s) (arc-length s in mm). Returns a tuple:
+    """Compute the per-segment shape features (and sort-out status) from the smoothed area signal A(s),
+    outer-width signal W(s) and height signal H(s) (arc-length s in mm). Returns a tuple:
 
     - `status`: a `segmentShapeStatus` code (`_STATUS_*`) — 0 kept, else the reason it was sorted out of
       the shape analysis (3 degenerate, 4 tiny body, 5 high width change, 6 didn't rupture).
     - `ruptures_flag`: 1.0/0.0 (the rupture gate) when a valid body level exists, else None. Set on every
       valid-body segment (even sorted-out ones) so the rupture *rate* is preserved; None only when the
       segment is too degenerate to even establish a body level.
-    - `values`: the 5 thinning/shape features (physical units) — only for a KEPT segment, else None.
+    - `values`: the thinning/shape features (physical units) — the area/width/height thinning + steadiness
+      pairs, the overshoot and the two rupture features — only for a KEPT segment, else None.
     - `sections`: the per-profile `segmentSection` phase code array — only for a KEPT segment, else None.
 
     Regions (all detected on the ±SEGMENT_BODY_BAND plateau band, so the flag matches what the features
@@ -251,11 +273,17 @@ def _segment_shape_values(s: np.ndarray, A: np.ndarray, W: np.ndarray
     if not ruptures:
         return _STATUS_NO_RUPTURE, ruptures_flag, None, None      # ended thick (truncated), not a real segment life
 
-    # --- KEPT: compute the 5 thinning/shape features + the section flag ---
+    # --- KEPT: compute the thinning family (area/width/height) + rupture + overshoot + the section flag ---
     out: dict[str, float] = {}
-    out["segmentBodyThinning"] = 100.0 * float(theilslopes(A[idx], s[idx])[0]) / body    # %/mm
-    r = spearmanr(s[idx], A[idx])[0]
-    out["segmentBodyThinningStability"] = float(r) if np.isfinite(r) else np.nan
+    # body thinning family: the same taper measured on area, width (widthOuter) and height (heightP95) over the
+    # body plateau `idx`, each normalised by its own body level (median over the 20-80% window `bmask`).
+    out["segmentBodyAreaThinning"], out["segmentBodyAreaSteadiness"] = _thinning_pair(A, s, idx, body)
+    w_win = W[bmask][np.isfinite(W[bmask])]
+    out["segmentBodyWidthThinning"], out["segmentBodyWidthSteadiness"] = _thinning_pair(
+        W, s, idx, float(np.median(w_win)) if w_win.size else np.nan)
+    h_win = H[bmask][np.isfinite(H[bmask])]
+    out["segmentBodyHeightThinning"], out["segmentBodyHeightSteadiness"] = _thinning_pair(
+        H, s, idx, float(np.median(h_win)) if h_win.size else np.nan)
     # overshoot: the peak of the start ramp [0, body_start) vs body
     peak = None
     if body_start > 0:
@@ -286,15 +314,16 @@ def measure_segment_shape(profiles: list[profileData]) -> None:
 
     Every `isSegment` run gets a `segmentShapeStatus` code (0 kept, 1-6 = sorted out of the shape analysis;
     see the module constants). A sorted-out segment keeps `segmentRuptures` (the rupture gate, so the
-    rupture *rate* survives) but its 5 thinning/shape features + `segmentSection` stay None, so it drops
+    rupture *rate* survives) but its thinning/shape features + `segmentSection` stay None, so it drops
     out of the thinning plots while the status records why. Only the shape analysis is gated this way —
     `segmentLength` / `segmentVolume` / `defectLength` still cover every run.
 
     Sets on each segment profile (None off-segment or on a sorted-out segment; NaN where a phase is
     absent):
 
-    - `segmentBodyThinning` (%/mm)          thinning rate over the body plateau (negative = thinning)
-    - `segmentBodyThinningStability` (-1..1) how steadily the body thins (Spearman of area vs arc-length)
+    - `segmentBody{Area,Width,Height}Thinning` (%/mm)     thinning rate over the body plateau, measured on
+                                         area (areaShoelace) / width (widthOuter) / height (heightP95); negative = thinning
+    - `segmentBody{Area,Width,Height}Steadiness` (-1..1)  how steadily each thins (Spearman of the signal vs arc-length)
     - `segmentCriticalArea` (mm^2)       cross-section at the rupture cliff top (last detected before failure)
     - `segmentRuptureLength` (mm)        arc-length of the terminal cliff (short = abrupt snap)
     - `segmentHeadOvershoot` (%)         the start ramp's peak, over the body level ("wider at the start")
@@ -318,6 +347,7 @@ def measure_segment_shape(profiles: list[profileData]) -> None:
     dist = profile_advance_distances(profiles)
     area = np.array([p.areaShoelace if p.areaShoelace is not None else np.nan for p in profiles], float)
     width = np.array([p.widthOuter if p.widthOuter is not None else np.nan for p in profiles], float)
+    height = np.array([p.heightP95 if p.heightP95 is not None else np.nan for p in profiles], float)
 
     for run in _contiguous_runs(_segment_mask(profiles)):
         s_mm = np.concatenate([[0.0], np.cumsum(dist[run][1:])]) * PROFILE_UNITS_TO_MM  # arc-length (mm)
@@ -330,7 +360,8 @@ def measure_segment_shape(profiles: list[profileData]) -> None:
         else:
             A = _median_smooth(area[run], SEGMENT_SHAPE_SMOOTH)
             W = _median_smooth(width[run], SEGMENT_SHAPE_SMOOTH)
-            status, ruptures_flag, values, sections = _segment_shape_values(s_mm, A, W)
+            H = _median_smooth(height[run], SEGMENT_SHAPE_SMOOTH)
+            status, ruptures_flag, values, sections = _segment_shape_values(s_mm, A, W, H)
         for local_i, i in enumerate(run):
             profiles[i].segmentShapeStatus = float(status)         # sort-out reason (broadcast per segment)
             if ruptures_flag is not None:
