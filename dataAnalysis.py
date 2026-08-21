@@ -1,75 +1,26 @@
-# %% Imports & config — run once (processing lives in profileProcessing.py; run it first if the cache is stale)
-import pyvista as pv
-
-import profile3Dplotting
-from datasetConfig import PROCESSED_FILE
-from featureComparison import compare_features
-from featurePlcTrends import DEFAULT_FEATURES, plot_feature_plc_trends
-from plcData import ALL_PLC_COLUMNS
-from profileLoading import load_profiles, read_file_attrs
-from profileProcessingAlgorithms import unlevel_profiles
-
-pv.global_theme.notebook = False  # show() pops the native interactive window (not a static inline image)
-
-# Use an interactive matplotlib backend so the 2D plot widgets (checkboxes / radios in
-# compare_features and plot_feature_plc_trends) work — otherwise VS Code cells render a static image.
-# Harmless when run as a plain script (no IPython -> the magic is skipped).
-try:
-    get_ipython().run_line_magic("matplotlib", "qt")  # type: ignore[name-defined]
-except (NameError, AttributeError):
-    pass
-
-PROFILE_STEP = 3   # draw every Nth profile  (3D subsampling; points ~ total / (PROFILE_STEP * POINT_STEP))
-POINT_STEP = 2     # draw every Nth point
-VOXEL_SIZE = 10    # keep one point per cube of this edge (profile units, 0.01 mm; None = off) — see plottingClass
-
-# Per-segment shape features (thinning / startup / rupture; one value per segment) — compared per speed level.
-SEGMENT_SHAPE_FEATURES = ("segmentBodyThinning", "segmentBodyThinningStability", "segmentCriticalArea",
-                          "segmentRuptureLength", "segmentHeadOvershoot", "segmentRuptures")
-
-# y-features for the stepwise feature-vs-PLC cell below (+ the derived pipePressureDifference, per level).
-PLC_FEATURES = ("widthFlank", "heightP95", "areaSimpson", "areaShoelace", "sliceVolume",
-                "segmentVolume", "segmentLength", "defectLength", "pipePressureDifference",
-                *SEGMENT_SHAPE_FEATURES)
-
-processed = load_profiles(PROCESSED_FILE)               # levelled columnar cache
-_attrs = read_file_attrs(PROCESSED_FILE)
-raw = unlevel_profiles(processed, float(_attrs["level_angle"]), float(_attrs["level_offset"]))  # "before" overlay
-print(f"{len(raw)} raw (reconstructed) / {len(processed)} processed profiles")
-
-
-# %% 3D overlay — raw (grey) vs processed (green) + floor baselines (red), z=0 ref (yellow)
+# %% 3D preprocessing (togglable) — raw/processed clouds, floor baselines + z=0, floor/filament, width markers; a left-edge checkbox toggles each layer
+# Setup lives in dataAnalysisSetup.py, so any cell can be clicked and run first in a fresh kernel; load() caches.
+from dataAnalysisSetup import PROFILE_STEP, POINT_STEP, VOXEL_SIZE, load, profile3Dplotting
+raw, processed = load()
 pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
-pl.plot(raw, "profile", "grey", profile_step=PROFILE_STEP, point_step=POINT_STEP)
-pl.plot(processed, "profile", "green", profile_step=PROFILE_STEP, point_step=POINT_STEP)
-pl.plot(processed, "baseline", "red")
-pl.plot(processed, "zeroBaseline", "yellow")
+pl.add_layer_toggles([  # (label, actor(s), label colour, shown at start) — floor + filament category view on by default
+    ("raw",         pl.plot(raw, "profile", "grey", profile_step=PROFILE_STEP, point_step=POINT_STEP),       "grey",        False),
+    ("processed",   pl.plot(processed, "profile", "green", profile_step=PROFILE_STEP, point_step=POINT_STEP), "green",       False),
+    ("baseline",    pl.plot(processed, "baseline", "red"),                                                    "red",         False),
+    ("z=0 ref",     pl.plot(processed, "zeroBaseline", "yellow"),                                             "yellow",      False),
+    ("floor",       pl.plot(processed, "profile", "saddlebrown", category="floor",
+                            profile_step=PROFILE_STEP, point_step=POINT_STEP),                                "saddlebrown", True),
+    ("filament",    pl.plot(processed, "profile", "green", category="profile",
+                            profile_step=PROFILE_STEP, point_step=POINT_STEP),                                "green",       True),
+    ("width flank", pl.plot(processed, "widthFlankPoints", "red", size=15, spheres=True),                     "red",         False),
+    ("width outer", pl.plot(processed, "widthOuterPoints", "blue", size=15, spheres=True),                    "blue",        False),
+])
 pl.show()
 
 
-# %% 3D category — floor (brown) vs filament (green)
-pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
-pl.plot(processed, "profile", "saddlebrown", category="floor", profile_step=PROFILE_STEP, point_step=POINT_STEP)
-pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
-pl.show()
-
-
-# %% 3D width markers — slope-peak (red) vs filament-edge (blue)   (needs a reprocessed cache)
-pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
-pl.plot(processed, "profile", "green", category="profile", profile_step=PROFILE_STEP, point_step=POINT_STEP)
-pl.plot(processed, "widthFlankPoints", "red", size=15, spheres=True)
-pl.plot(processed, "widthOuterPoints", "blue", size=15, spheres=True)
-pl.show()
-
-
-# %% 3D heat-map — one plot for ALL features; auto-switches filament-only ↔ all points per feature   (needs a reprocessed cache)
-# geometry + PLC colour the filament points; defectLength, the isSegment/isNotFlat/isContinuousFilament flags,
-# the segmentSection phase code (1 body / 2 rupture / 3 peak), and segmentShapeStatus (0 kept / 1-6 sort-out
-# reason) colour all points — both per-segment debug views.
-HEATMAP_FEATURES = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace",
-                    "segmentVolume", "sliceVolume", "segmentLength", "defectLength",
-                    "isSegment", "isNotFlat", "isContinuousFilament",
-                    *SEGMENT_SHAPE_FEATURES, "segmentSection", "segmentShapeStatus")
+# %% 3D heat-map — colour the cloud by any feature (Geometry / Segment / PLC selector); bodyThinning + segFlags expand to sub-panels, segmentShapeStatus is categorical
+from dataAnalysisSetup import ALL_PLC_COLUMNS, HEATMAP_FEATURES, PROFILE_STEP, POINT_STEP, VOXEL_SIZE, load, profile3Dplotting
+raw, processed = load()
 pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
 pl.plot_feature_heatmap(processed, features=HEATMAP_FEATURES + ALL_PLC_COLUMNS,
                         initial="widthOuter", profile_step=PROFILE_STEP, point_step=POINT_STEP)
@@ -77,25 +28,35 @@ pl.show()
 
 
 # %% 2D feature-vs-time — all features + PLC vars, category-grouped; one curve -> its real units   (needs a GUI backend)
+from dataAnalysisSetup import ALL_PLC_COLUMNS, DEFAULT_FEATURES, compare_features, load
+raw, processed = load()
 compare_features(processed, features=DEFAULT_FEATURES + ALL_PLC_COLUMNS,
                  initial=("printHeadTorque",), initial_smooth=("printHeadTorque",), smooth_window_init=25,
                  time_unit="min", profile_step=5)
 
 
 # %% 2D feature-vs-PLC (stepwise) — box/violin per level; toggle features, pick channel, median/mean   (needs a GUI backend)
+from dataAnalysisSetup import PLC_FEATURES, load, plot_feature_plc_trends
+raw, processed = load()
 plot_feature_plc_trends(processed, kind="stepwise", features=PLC_FEATURES,
                         initial_feature="widthFlank", initial_channel="rollerbandSpeed", profile_step=5)
 
 
 # %% 2D feature-vs-PLC (continuous) — hexbin density + trend; ANY subject on either axis   (needs a GUI backend)
 # Shared pool of all features + every PLC channel, grouped by category: x = pick one, y = toggle several.
+from dataAnalysisSetup import ALL_PLC_COLUMNS, DEFAULT_FEATURES, load, plot_feature_plc_trends
+raw, processed = load()
 plot_feature_plc_trends(processed, kind="continuous", features=DEFAULT_FEATURES, channels=ALL_PLC_COLUMNS,
                         initial_feature="widthFlank", initial_channel="pressurePrintHead", profile_step=5)
 
 
 # %% [TUNING — safe to delete] dial the floor/filament split live (shallow copies; pipeline untouched)
 import copy as _copy
+
+from dataAnalysisSetup import PROFILE_STEP, POINT_STEP, VOXEL_SIZE, load, profile3Dplotting
 from profileProcessingAlgorithms import categorize_floor_points, grow_profile_points
+
+raw, processed = load()
 
 # raise GROW_THRESHOLD / lower FILL_GAP to trim filament bleed into the floor (cache built with 20 / 5)
 GROW_THRESHOLD    = 150     # z (0.01 mm) to grow the filament down to (HIGHER = less edge bleed)

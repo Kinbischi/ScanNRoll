@@ -52,10 +52,12 @@ CONTINUOUS_CHANNELS: tuple[str, ...] = (
 )
 
 # Per-segment shape features (measure_segment_shape): one value broadcast across a whole segment, like
-# segmentVolume/segmentLength. The rupture/critical ones are NaN on segments that ended thick.
+# segmentVolume/segmentLength. The rupture/critical ones are NaN on segments that ended thick. The three
+# body steadiness values and segmentRuptures are heat-map-only, so they are intentionally excluded here (the
+# 2D feature-vs-time / feature-vs-PLC plots stay focused on the thinning rates + rupture geometry).
 _SEGMENT_SHAPE_FEATURES = (
-    "segmentBodyThinning", "segmentBodyThinningStability", "segmentCriticalArea",
-    "segmentRuptureLength", "segmentHeadOvershoot", "segmentRuptures",
+    "segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",
+    "segmentCriticalArea", "segmentRuptureLength", "segmentHeadOvershoot",
 )
 
 # Default y-features: per-profile geometry plus the broadcast segment/defect aggregates. NOTE the segment
@@ -65,7 +67,7 @@ _SEGMENT_SHAPE_FEATURES = (
 # (pure-floor) profiles, so it plots on a disjoint profile subset from the filament features.
 DEFAULT_FEATURES: tuple[str, ...] = (
     "widthFlank", "widthOuter", "heightP95", "heightSmooth",
-    "areaSimpson", "areaShoelace", "sliceVolume",
+    "areaSimpson", "areaShoelace",
     "segmentVolume", "segmentLength", "defectLength",
     *_SEGMENT_SHAPE_FEATURES,
 )
@@ -296,29 +298,25 @@ class FeaturePlcPlot:
                 (0.828, 0.26, 0.168, 0.66), self._x_options, self._on_xpick,
                 {k: (k == self._channel) for k in self._x_options}, "x: pick one")
         else:
-            self._show_ax = self.fig.add_axes((0.015, 0.30, 0.15, 0.60), frame_on=True)
+            # feature panel: category-grouped multi-select (same Geometry/Segment/PLC grouping as the heat
+            # map and the continuous view), sitting above the shape radio; channel picker stays a single radio
+            self._show_groups = self._build_grouped_panel(
+                (0.008, 0.28, 0.165, 0.64), self._features, self._on_show,
+                {f: self._visible[f] for f in self._features}, "features (show)")
             self._chan_ax = self.fig.add_axes((0.855, 0.30, 0.14, 0.60), frame_on=True)
-            self._show_ax.set_title("features (show)", fontsize=11)
             self._chan_ax.set_title("channel (x)", fontsize=11)
-            box = {"s": 90}
-            self._show = CheckButtons(self._show_ax, list(self._features),
-                                      [self._visible[f] for f in self._features],
-                                      frame_props=box, check_props=box)
-            for txt in self._show.labels:
-                txt.set_fontsize(10)
             self._chan_radio = RadioButtons(self._chan_ax, self._channels,
                                             active=self._channels.index(self._channel))
-            self._show.on_clicked(self._on_show)
             self._chan_radio.on_clicked(self._on_channel)
             # shape (box/violin) only applies to the per-level view
-            self._shape_ax = self.fig.add_axes((0.015, 0.08, 0.15, 0.15), frame_on=True)
+            self._shape_ax = self.fig.add_axes((0.015, 0.06, 0.15, 0.16), frame_on=True)
             self._shape_ax.set_title("shape", fontsize=11)
             self._shape_radio = RadioButtons(self._shape_ax, list(_SHAPES), active=_SHAPES.index(self._shape))
             self._shape_radio.on_clicked(self._on_shape)
 
     def _build_grouped_panel(self, region: tuple[float, float, float, float], keys: tuple[str, ...],
                              on_click, states: dict[str, bool], title: str,
-                             box_size: int = 34) -> list[tuple[CheckButtons, list[str]]]:
+                             box_size: int = 64) -> list[tuple[CheckButtons, list[str]]]:
         """Draw a category-grouped CheckButtons panel inside `region` (x, y, w, h in figure fractions):
         one CheckButtons per non-empty SELECTOR_CATEGORIES group under a bold header. Returns
         `[(CheckButtons, [keys]), ...]`; multi- vs single-select is enforced by `on_click`. Row height is
@@ -350,13 +348,11 @@ class FeaturePlcPlot:
         return out
 
     def _on_show(self, _label: str) -> None:
-        if self._kind == "continuous":  # multi-select over every grouped y-panel
-            for cb, keys in self._y_groups:
-                for k, status in zip(keys, cb.get_status()):
-                    self._visible[k] = bool(status)
-        else:
-            for f, status in zip(self._features, self._show.get_status()):
-                self._visible[f] = bool(status)
+        # multi-select over every grouped feature panel (y-panel for continuous, feature panel for stepwise)
+        groups = self._y_groups if self._kind == "continuous" else self._show_groups
+        for cb, keys in groups:
+            for k, status in zip(keys, cb.get_status()):
+                self._visible[k] = bool(status)
         self._render()
 
     def _on_xpick(self, label: str) -> None:
