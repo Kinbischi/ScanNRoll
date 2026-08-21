@@ -16,33 +16,39 @@ FEATURE_DISPLAY = {
     "heightSmooth": ("height", 0.01, "mm"),
     "areaSimpson":      ("area",   1e-4, "mm^2"),
     "areaShoelace":     ("area",   1e-4, "mm^2"),
-    # Volumes: area-unit * distance-unit -> cm^3 (1e-4 mm^2 * 0.01 mm = 1e-6 mm^3 = 1e-9 cm^3). Each
-    # its own colour group: a segment total is ~10^2-10^3x a single slice, so they must not share a clim.
+    # segmentVolume: area-unit * distance-unit -> cm^3 (1e-4 mm^2 * 0.01 mm = 1e-6 mm^3 = 1e-9 cm^3), its own
+    # colour group. (sliceVolume, the per-profile slab, is a backend-only field — not shown in any plot.)
     "segmentVolume":    ("segmentVolume", 1e-9, "cm^3"),
-    "sliceVolume":      ("sliceVolume",   1e-9, "cm^3"),
     # Run lengths along the print path: profile units -> mm (0.01). Own colour groups (a macro cm-scale
     # length, unlike the mm-scale bead widths). defectLength lives on pure-floor profiles, so it only
     # shows in a floor-category heat-map (`plot_feature_heatmap(..., category="floor")`).
     "segmentLength":    ("segmentLength", 0.01, "mm"),
     "defectLength":     ("defectLength",  0.01, "mm"),
-    # Per-profile 0/1 flags (share one 0-1 colour group; 1 = filament/segment -> same high colour):
-    # `isSegment` = part of a cleaned filament segment (clean_flat_runs), `isNotFlat` = raw "has filament
-    # points" (inverse of isFlat), `isContinuousFilament` = an isSegment run too long to be a discrete segment
-    # (classify_continuous_filaments; excluded from shape analysis). View over ALL points
-    # (`plot_feature_heatmap(..., category=None)`) so bridged floor-only gaps are visible.
-    "isSegment":        ("segFlag", 1.0, ""),
-    "isNotFlat":        ("segFlag", 1.0, ""),
-    "isContinuousFilament": ("segFlag", 1.0, ""),
     # Per-segment shape features (measure_segment_shape), broadcast over the segment. Already in physical
     # units (factor 1.0), each its own colour group. NaN off a rupture / on a too-short segment.
-    "segmentBodyThinning":         ("segmentBodyThinning", 1.0, "%/mm"),
-    "segmentBodyThinningStability": ("segmentBodyThinningStability", 1.0, ""),
+    # Body thinning family: the taper measured on area / width (widthOuter) / height (heightP95) — a rate
+    # (%/mm; each its own colour scale) + a steadiness (Spearman, -1..1). In the heat-map selector these six
+    # sit behind the `bodyThinning` parent (EXPANDER_GROUPS); in the 2D plots they are ordinary features.
+    "segmentBodyAreaThinning":    ("segmentBodyAreaThinning", 1.0, "%/mm"),
+    "segmentBodyWidthThinning":   ("segmentBodyWidthThinning", 1.0, "%/mm"),
+    "segmentBodyHeightThinning":  ("segmentBodyHeightThinning", 1.0, "%/mm"),
+    "segmentBodyAreaSteadiness":  ("segmentBodyAreaSteadiness", 1.0, ""),
+    "segmentBodyWidthSteadiness": ("segmentBodyWidthSteadiness", 1.0, ""),
+    "segmentBodyHeightSteadiness":("segmentBodyHeightSteadiness", 1.0, ""),
     "segmentCriticalArea":      ("segmentCriticalArea", 1.0, "mm^2"),
     "segmentRuptureLength":     ("segmentRuptureLength", 1.0, "mm"),
     "segmentHeadOvershoot":     ("segmentHeadOvershoot", 1.0, "%"),
     "segmentRuptures":          ("segmentRuptures", 1.0, ""),
     "segmentSection":           ("segmentSection", 1.0, ""),   # per-profile phase code (1/2/3); debug view
     "segmentShapeStatus":       ("segmentShapeStatus", 1.0, ""),  # per-segment sort-out reason (0-6); debug view
+    # Per-profile 0/1 segmentation flags (share one 0-1 colour group; 1 = filament/segment = high colour):
+    # isNotFlat = raw "has filament points", isSegment = in a cleaned segment, isContinuousFilament = a
+    # segment run too long to be discrete. Coloured over ALL points so bridged floor-only gaps are visible.
+    # In the heat-map selector they sit behind the `segFlags` parent (EXPANDER_GROUPS); in the 2D plots they
+    # are ordinary Segment features.
+    "isNotFlat":            ("segFlag", 1.0, ""),
+    "isSegment":            ("segFlag", 1.0, ""),
+    "isContinuousFilament": ("segFlag", 1.0, ""),
     # PLC machine-log channels (joined by timestamp) + derived ones (e.g. pipePressureDifference):
     # each its own colour group, since their magnitudes differ widely. Shown in the PLC's native
     # engineering units (factor 1.0; the unit label is left blank as the units aren't recorded in the CSV).
@@ -56,9 +62,9 @@ FEATURE_DISPLAY = {
 CATEGORICAL_FEATURES: dict[str, dict[int, str]] = {
     "segmentShapeStatus":   {0: "kept", 1: "too short", 2: "continuous", 3: "degenerate",
                              4: "tiny body", 5: "high width", 6: "no rupture"},
-    # Only `segmentShapeStatus` (the sort-out reason) uses the checkbox panel. The 0/1 flags (`isSegment`,
-    # `isNotFlat`, `isContinuousFilament`, `segmentRuptures`) and `segmentSection` (phase) keep the plain
-    # gradient rendering (viridis + colour bar), so they are intentionally NOT listed here.
+    # Only `segmentShapeStatus` (the sort-out reason) uses the multicolour checkbox grey-out panel — its
+    # values are unordered category codes. Everything else (incl. the 0/1 flags, the phase code, and the
+    # bodyThinning members) keeps the plain gradient rendering (viridis + colour bar) and is NOT listed here.
 }
 # Distinct qualitative colours (RGB 0-1), one per category index; entry 0 (green) reads as the "normal" code
 # (segmentShapeStatus 0 = kept). Off-category points (NaN) render grey (the LUT's nan_color).
@@ -93,8 +99,27 @@ def _feature_pointset(feature: str) -> "str | None":
     return None if feature in _ALL_POINT_FEATURES else "profile"
 
 
-# For the selector: a paired row shows the measure name once + a short per-method button label.
-_GROUP_DISPLAY = {"segFlag": "flags"}  # measure label of a paired row (else the FEATURE_DISPLAY group name)
+# Heat-map selector "expander" groups: a parent button (left panel) that, when active, reveals its member
+# features as a plain-gradient radio sub-panel at the bottom-centre. Each member is rendered exactly like a
+# normal gradient feature — same green/grey button style and its own colour scale — NOT the categorical
+# grey-out panel (which stays exclusive to segmentShapeStatus, the only CATEGORICAL_FEATURES member; that
+# path rebuilds a mask on every toggle and is laggier). The members are ordinary features elsewhere: the 2D
+# plots list them individually under Segment (they are in SELECTOR_CATEGORIES); only the 3D heat-map selector
+# collapses each group to its parent button. Member order here sets the sub-panel's top-to-bottom order.
+EXPANDER_GROUPS: dict[str, tuple[str, ...]] = {
+    "bodyThinning": ("segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",
+                     "segmentBodyAreaSteadiness", "segmentBodyWidthSteadiness", "segmentBodyHeightSteadiness"),
+    "segFlags": ("isNotFlat", "isSegment", "isContinuousFilament"),
+}
+_MEMBER_TO_PARENT = {m: p for p, members in EXPANDER_GROUPS.items() for m in members}
+_MAX_MEMBERS = max(len(v) for v in EXPANDER_GROUPS.values())
+# Short sub-panel button labels (member -> label); the parent button itself carries the group name.
+_MEMBER_LABEL = {
+    "segmentBodyAreaThinning": "areaThinning", "segmentBodyWidthThinning": "widthThinning",
+    "segmentBodyHeightThinning": "heightThinning", "segmentBodyAreaSteadiness": "areaSteadiness",
+    "segmentBodyWidthSteadiness": "widthSteadiness", "segmentBodyHeightSteadiness": "heightSteadiness",
+    "isNotFlat": "notFlat", "isSegment": "isSeg", "isContinuousFilament": "contFil",
+}
 
 
 def _method_label(feature: str) -> str:
@@ -107,17 +132,37 @@ def _method_label(feature: str) -> str:
     return feature
 
 
+def _selector_tokens(feats: list[str]) -> list[str]:
+    """Collapse expander-group members in `feats` to a single parent token at the first member's position,
+    leaving non-member features unchanged. Used only by the 3D heat-map selector so a group of members
+    (e.g. the bodyThinning family) shows as ONE parent button that reveals its members at the bottom-centre."""
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for f in feats:
+        parent = _MEMBER_TO_PARENT.get(f)
+        if parent is None:
+            tokens.append(f)
+        elif parent not in seen:
+            seen.add(parent)
+            tokens.append(parent)
+    return tokens
+
+
 # Feature-selector button-panel categories (grouping + headers only; independent of the FEATURE_DISPLAY
 # colour groups and the point-set groups above). Features not in any list fall under "Other". Public so the
 # 2D feature-comparison selector (featureComparison.py) groups identically — single source of truth (§11).
 SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Geometry", ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace", "sliceVolume")),
-    ("Segment", ("segmentHeadOvershoot",                                               # startup phase
-                 "segmentBodyThinning", "segmentBodyThinningStability",                      # body phase
-                 "segmentRuptures", "segmentCriticalArea", "segmentRuptureLength",    # rupture phase
-                 "segmentVolume", "segmentLength", "defectLength",                    # run aggregates
-                 "isSegment", "isNotFlat", "isContinuousFilament",                    # 0/1 flags
-                 "segmentSection", "segmentShapeStatus")),                            # per-segment debug codes
+    ("Geometry", ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace")),
+    # NOTE the body-thinning members and the 0/1 flags are listed here individually (so the 2D plots group
+    # them under Segment), but the 3D heat-map selector collapses each EXPANDER_GROUP to a single parent
+    # button (bodyThinning / segFlags) via `_selector_tokens`. Member ORDER here places the parent button.
+    ("Segment", ("segmentVolume", "segmentLength", "defectLength",                    # run aggregates (top row)
+                 "segmentHeadOvershoot",                                               # startup phase
+                 "segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",       # body thinning \
+                 "segmentBodyAreaSteadiness", "segmentBodyWidthSteadiness", "segmentBodyHeightSteadiness",  # + steadiness -> bodyThinning parent
+                 "segmentCriticalArea", "segmentRuptureLength", "segmentRuptures",    # rupture phase
+                 "isNotFlat", "isSegment", "isContinuousFilament",                    # seg flags -> segFlags parent
+                 "segmentShapeStatus", "segmentSection")),                            # debug: sortout / phase
     ("PLC", ALL_PLC_COLUMNS),
 )
 
@@ -126,20 +171,16 @@ SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
 # `rowlabel [btn:label] [btn:label] …` (like the width/area pairs) but keep their OWN colour scale. Used to
 # pack the many segment-shape features into per-phase rows so the panel doesn't overflow the window.
 FEATURE_UI: dict[str, tuple[str, str]] = {
-    "segmentHeadOvershoot":     ("startup", "overshoot"),
-    "segmentBodyThinning":         ("body", "taper"),
-    "segmentBodyThinningStability": ("body", "steady"),
-    "segmentRuptures":          ("rupture", "ruptured"),
-    "segmentCriticalArea":      ("rupture", "start"),      # cross-section at the rupture start
-    "segmentRuptureLength":     ("rupture", "length"),
-    "segmentVolume":            ("runs", "seg vol"),
+    "segmentVolume":            ("runs", "seg vol"),     # run aggregates -> top row of the Segment category
     "segmentLength":            ("runs", "seg len"),
     "defectLength":             ("runs", "defect"),
-    "isSegment":                ("flags", "isSeg"),
-    "isNotFlat":                ("flags", "notFlat"),
-    "isContinuousFilament":     ("flags", "contFil"),
-    "segmentSection":           ("debug", "phase"),      # per-profile phase code (1/2/3)
-    "segmentShapeStatus":       ("debug", "sortout"),    # per-segment sort-out reason (0-6)
+    "segmentHeadOvershoot":     ("startup", "overshoot"),
+    "bodyThinning":             ("body", "Thinning"),      # parent token -> expands to the thinning/steadiness members ("body" is the row label)
+    "segmentCriticalArea":      ("rupture", "critArea"),   # cross-section at the rupture start (segmentRuptures
+    "segmentRuptureLength":     ("rupture", "length"),     # dropped from the heat map -> read it off `sortout`)
+    "segFlags":                 ("debug", "segFlags"),    # parent token -> expands to notFlat/isSeg/contFil
+    "segmentShapeStatus":       ("debug", "sortout"),     # per-segment sort-out reason (0-6)
+    "segmentSection":           ("debug", "phase"),       # per-profile phase code (1/2/3)
 }
 # PLC channels are packed a few per row with short labels so the (many) channels don't overflow the panel.
 _PLC_LABEL: dict[str, str] = {
@@ -218,12 +259,16 @@ class plottingClass:
         return cast("pv.DataSet", cloud.extract_points(np.sort(idx)))
 
     def show(self):
-        self.plotter.add_camera_orientation_widget()
+        widget = self.plotter.add_camera_orientation_widget()
+        try:  # default anchor is upper-right, which now clashes with the sub-panels -> move it to upper-left
+            widget.GetRepresentation().AnchorToUpperLeft()
+        except AttributeError:
+            pass
         self.plotter.show()
 
     def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5,
              profile_step: int = 1, point_step: int = 1, flat_colour: str | None = None,
-             category: str | None = None, spheres: bool = False) -> None:
+             category: str | None = None, spheres: bool = False) -> "object | None":
         """Add one subject to the 3D scene: "profile", "baseline", "zeroBaseline",
         "widthFlankPoints" (slope-peak method, uses `widthFlankIdx`), or "widthOuterPoints" (outer-filament-
         point method, uses `widthOuterIdx`).
@@ -241,33 +286,40 @@ class plottingClass:
         category (profiles only): "floor" or "profile" draws only points of that category
         (uses `floorMask`); None draws all points. Call twice with different category +
         colour to show floor vs filament in two colours.
+
+        Returns the added actor (or a list of actors for the two-colour `flat_colour` case, or None if
+        nothing was drawn) so the caller can toggle its visibility, e.g. via `add_layer_toggles`.
         """
         match plotSubject:
             case "profile":
                 if flat_colour is None:
-                    self.add_3d_points_to_plot(
+                    return self.add_3d_points_to_plot(
                         get_profile_points_for_plot(profiles, profile_step, point_step, category=category), colour, size)
-                else:
+                actors = [
                     self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=False, category=category), colour, size)
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=False, category=category), colour, size),
                     self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=True, category=category), flat_colour, size)
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=True, category=category), flat_colour, size),
+                ]
+                return [a for a in actors if a is not None]
             case "baseline":
-                self.add_lines_to_plot(line_points_from_floorSides(profiles), colour)
+                return self.add_lines_to_plot(line_points_from_floorSides(profiles), colour)
             case "zeroBaseline":
                 # flat z = 0 reference on each profile (the uniform leveling target)
-                self.add_lines_to_plot(line_points_from_zero(profiles), colour)
+                return self.add_lines_to_plot(line_points_from_zero(profiles), colour)
             case "widthFlankPoints":
                 # slope-peak width method: mark the two flank-foot points (from `widthFlankIdx`)
-                self.add_3d_points_to_plot(width_point_arrays(profiles, "widthFlankIdx"), colour, size, spheres=spheres)
+                return self.add_3d_points_to_plot(width_point_arrays(profiles, "widthFlankIdx"), colour, size, spheres=spheres)
             case "widthOuterPoints":
                 # filament-edge width method: mark the two outer filament points (from `widthOuterIdx`)
-                self.add_3d_points_to_plot(width_point_arrays(profiles, "widthOuterIdx"), colour, size, spheres=spheres)
+                return self.add_3d_points_to_plot(width_point_arrays(profiles, "widthOuterIdx"), colour, size, spheres=spheres)
+        return None
 
-    def add_3d_points_to_plot(self,points, colour = 'green', point_size=5, spheres=False):
+    def add_3d_points_to_plot(self, points: list, colour: str = 'green', point_size: int = 5,
+                              spheres: bool = False) -> "object | None":
         # Collect every profile's transformed points and add them as a single actor, placed along the
         # shared physical print path (self.pathPoints, built in __init__). One add_points call instead
-        # of one per profile is far faster for many profiles.
+        # of one per profile is far faster for many profiles. Returns the actor (None if no points).
         transformed = []
         for i, prof in enumerate(points):
             if prof.shape[0] > 0:
@@ -278,11 +330,13 @@ class plottingClass:
             cloud = pv.PolyData(np.vstack(transformed))
             if not spheres:  # dense cloud: downsample; markers (spheres) stay full so both show
                 cloud = self._maybe_voxel(cloud)
-            self.plotter.add_points(cloud, color=colour, point_size=point_size, render_points_as_spheres=spheres)
+            return self.plotter.add_points(cloud, color=colour, point_size=point_size, render_points_as_spheres=spheres)
+        return None
 
-    def add_lines_to_plot(self, linePoints, colour = 'green'):
+    def add_lines_to_plot(self, linePoints: list, colour: str = 'green') -> "object | None":
         # Collect every line's two transformed endpoints and add them all as a single mesh, placed
         # along the shared physical print path. One add_mesh call is far faster for many profiles.
+        # Returns the line actor (None if there were no lines).
         endpoints = []
         for i in range(len(linePoints)):
             rot_matrix = self.rotation_matrices[i]
@@ -294,7 +348,39 @@ class plottingClass:
         if endpoints:
             # points ordered as segment pairs (p0, p1, p0, p1, ...) -> one line per pair
             lines = pv.line_segments_from_points(np.array(endpoints))
-            self.plotter.add_mesh(lines, color = colour, line_width=5)
+            return self.plotter.add_mesh(lines, color = colour, line_width=5)
+        return None
+
+    def add_layer_toggles(self, layers: "list[tuple[str, object, str, bool]]",
+                          size: int = 26, gap: int = 10) -> None:
+        """Add a left-edge checkbox per named layer to show/hide it live (independent multi-select).
+
+        `layers`: list of `(label, actors, colour, initial_on)` — `actors` is one actor or a list of actors
+        (as returned by `plot`; `None` entries are ignored), `colour` tints the label to match the layer, and
+        `initial_on` sets both the checkbox and the actors' initial visibility. Bottom-anchored on the left
+        edge (below the camera-orientation gizmo). Needs a live interactor (interactive window only).
+        """
+        x, n = 12, len(layers)
+        self._toggle_buttons = []  # keep the widget refs alive for the lifetime of the plotter
+        for j, (label, actors, colour, on) in enumerate(layers):
+            acts = [a for a in (actors if isinstance(actors, list) else [actors]) if a is not None]
+            for a in acts:
+                a.SetVisibility(on)
+            y = 12 + (n - 1 - j) * (size + gap)  # first layer highest
+            widget = self.plotter.add_checkbox_button_widget(
+                self._make_toggle_callback(acts), value=on,
+                position=(x, y), size=size, color_on="green", color_off="grey")
+            self._toggle_buttons.append(widget)
+            # shadow keeps a pale label (yellow / grey) legible against a light background
+            self.plotter.add_text(label, position=(x + size + 6, y + 4), font_size=12, color=colour, shadow=True)
+
+    def _make_toggle_callback(self, actors: list):
+        """Click handler for one layer checkbox: show/hide that layer's actor(s)."""
+        def callback(state: bool) -> None:
+            for a in actors:
+                a.SetVisibility(state)
+            self.plotter.render()
+        return callback
 
     def plot_feature_heatmap(self, profiles: list[profileData],
                              features: tuple[str, ...] = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace"),
@@ -312,16 +398,21 @@ class plottingClass:
 
         Features live on different point sets, so the heat-map **prebuilds one cloud per point set** and
         swaps the visible one when the active feature changes (see `_feature_pointset`): filament
-        geometry + PLC channels colour the **filament** points, while the `isSegment` / `isNotFlat` flags
-        and `defectLength` (which live on floor/gap profiles) colour **all** points. Switching within a
+        geometry + PLC channels colour the **filament** points, while the 0/1 segmentation flags and
+        `defectLength` (which live on floor/gap profiles) colour **all** points. Switching within a
         point set only repoints the mapper (instant); switching across point sets swaps which cloud is
         drawn, so the displayed points change (filament-only ↔ all) while the camera is kept. NaN feature
         values render in the NaN colour. Interactive-window only (buttons need a live VTK interactor).
+
+        Some features are grouped behind an EXPANDER_GROUPS parent button (bodyThinning / segFlags): the
+        parent sits in the left panel and, when active, reveals its members as a plain-gradient radio
+        sub-panel at the bottom-centre (`_add_member_selector`).
         """
         self._build_feature_cloud(profiles, features, initial, cmap, point_size, profile_step, point_step)
         self._add_feature_selector()
         self._add_scale_selector()
-        self._add_category_selector()  # category-toggle checkboxes (shown only for a categorical feature)
+        self._add_category_selector()  # categorical grey-out checkboxes (shown only for a categorical feature)
+        self._add_member_selector()    # expander sub-panel (shown only for a bodyThinning/segFlags member)
 
     def _build_feature_cloud(self, profiles: list[profileData], features: tuple[str, ...],
                              initial: str, cmap: str, point_size: int,
@@ -352,6 +443,13 @@ class plottingClass:
         self._cat_slot_codes: list = []  # code currently assigned to each checkbox slot (None = unused)
         self._cat_hidden: set = set()    # category codes currently greyed out
         self._cat_panel_active = False   # is the category checkbox panel currently shown
+        self._sub_buttons: list = []     # expander sub-panel radio buttons (built by _add_member_selector)
+        self._sub_labels: list = []      # their text labels
+        self._sub_slot_features: list = []  # member feature assigned to each sub-panel slot (None = unused)
+        self._member_panel_active = False   # is the expander sub-panel currently shown
+        self._feature_buttons: list = []    # left-panel feature/parent buttons (built by _add_feature_selector)
+        self._button_targets: list = []     # parallel to _feature_buttons: ("feature", name) | ("parent", name)
+        self._group_current = {p: EXPANDER_GROUPS[p][0] for p in EXPANDER_GROUPS}  # last member picked per group
 
         by_pointset: dict = {}
         for f in features:
@@ -447,12 +545,19 @@ class plottingClass:
             self._apply_categorical(feature, mapper)
         else:
             self._apply_gradient(feature, mode, cloud, mapper)
+        self._sync_left_radio(feature)  # keep the left panel's parent/feature buttons in sync with the active feature
         self.plotter.render()
 
     def _apply_gradient(self, feature: str, mode: str, cloud, mapper) -> None:
         """Continuous feature: the viridis gradient LUT + the shared colour bar, coloured by the value (or
-        rank) array with the mode's colour range and log flag."""
+        rank) array with the mode's colour range and log flag. An expander-group member also shows its
+        bottom-centre sub-panel; any other feature hides it."""
         self._hide_category_panel()
+        if feature in _MEMBER_TO_PARENT:
+            self._group_current[_MEMBER_TO_PARENT[feature]] = feature
+            self._show_member_panel(feature)
+        else:
+            self._hide_member_panel()
         mapper.lookup_table = self._gradient_luts[self._visible_ps]  # restore the gradient LUT
         clim = self._feature_scale_clim[feature][mode]
         render_mode = mode
@@ -471,8 +576,9 @@ class plottingClass:
     def _apply_categorical(self, feature: str, mapper) -> None:
         """Categorical feature: a discrete distinct-colour LUT keyed by the integer code + a bottom-centre
         checkbox panel (one toggle per category, coloured to match). Unchecking a category greys it out
-        (remapped to NaN in a companion mask array). The gradient colour bar is hidden."""
+        (remapped to NaN in a companion mask array). The gradient colour bar + any expander sub-panel are hidden."""
         self._remove_scalar_bar()
+        self._hide_member_panel()
         items = sorted(CATEGORICAL_FEATURES[feature].items())  # [(code, label), ...]; codes contiguous
         lo, hi = items[0][0], items[-1][0]
         mapper.lookup_table = self._categorical_lut(feature, lo, hi, len(items))
@@ -513,24 +619,31 @@ class plottingClass:
             self._bar_active = False
             self._scalar_bar_ps = "<none>"
 
-    # --- category checkbox panel (bottom-centre; shown only for a categorical feature) ---------------
-    def _cat_panel_x(self) -> int:
-        """Left x (pixels) of the bottom-centre category panel, tracking the current window width."""
-        return int(self.plotter.window_size[0]) // 2 - 64
+    # --- side sub-panels (category + expander; upper-RIGHT, top-anchored, so they clear the centre print-
+    #     path cloud, the bottom-centre colour bar, and the bottom-right scale selector) -----------------
+    def _side_panel_x(self) -> int:
+        """Left x (pixels) of the upper-right sub-panels, leaving room for the long member labels before the
+        window's right edge (tracks the current window width)."""
+        return int(self.plotter.window_size[0]) - 250
+
+    def _side_panel_top_y(self) -> int:
+        """Top y (pixels, from the bottom) of the upper-right sub-panels: near the top edge, stacking
+        downward, so they sit clear of the cloud and the bottom-right scale selector."""
+        return int(self.plotter.window_size[1]) - 70
 
     def _show_category_panel(self, feature: str) -> None:
         """Assign the active categorical feature's codes to the checkbox pool: position + label the first N
-        slots at bottom-centre and show them, parking the rest off-screen. No-op until the pool exists.
-        Slot j's fixed button colour is palette[j], so it already matches the j-th category's colour."""
+        slots at the upper-right (top-anchored, first code highest) and show them, parking the rest
+        off-screen. No-op until the pool exists. Slot j's fixed button colour is palette[j]."""
         if not self._cat_buttons:
             return
         items = sorted(CATEGORICAL_FEATURES[feature].items())
-        n, x, size = len(items), self._cat_panel_x(), self._cat_size
+        n, x, size, top_y = len(items), self._side_panel_x(), self._cat_size, self._side_panel_top_y()
         for j, (btn, lbl) in enumerate(zip(self._cat_buttons, self._cat_labels)):
             if j < n:
                 code, label = items[j]
                 self._cat_slot_codes[j] = code
-                y = 12 + (n - 1 - j) * (size + 8)  # first code highest
+                y = top_y - j * (size + 8)  # first code highest (top-anchored, stacking downward)
                 btn.GetRepresentation().PlaceWidget([x, x + size, y, y + size, 0.0, 0.0])
                 btn.GetRepresentation().SetState(0 if code in self._cat_hidden else 1)
                 btn.GetRepresentation().SetVisibility(True)
@@ -613,7 +726,8 @@ class plottingClass:
         # rows top-to-bottom: a header per category, then feature rows as (row_label_or_None, [(feature, label), …])
         rows: list[tuple] = []
         for name, members in (*SELECTOR_CATEGORIES, ("Other", other)):
-            feats = [f for f in members if f in self._feature_names]
+            # collapse any expander-group members to their single parent token (bodyThinning / segFlags)
+            feats = _selector_tokens([f for f in members if f in self._feature_names])
             if not feats:
                 continue
             rows.append(("header", name))
@@ -628,7 +742,7 @@ class plottingClass:
                 for key, items in groups.items():
                     if all(lbl is None for _, lbl in items):        # colour-group features (width/area/singletons)
                         if len(items) >= 2:                          # paired measures -> measure + method labels
-                            rows.append(("features", _GROUP_DISPLAY.get(key, key),
+                            rows.append(("features", key,
                                          [(f, _method_label(f)) for f, _ in items]))
                         else:                                        # singleton -> full name, no row label
                             rows.append(("features", None, [(items[0][0], items[0][0])]))
@@ -639,7 +753,7 @@ class plottingClass:
             rows.pop()  # no trailing spacer
 
         self._feature_buttons = []
-        idx = 0  # each button's index into self._feature_buttons (for the radio)
+        self._button_targets = []  # parallel: ("feature", name) | ("parent", name) — drives _sync_left_radio
         n = len(rows)
         for r, item in enumerate(rows):
             y = 12 + (n - 1 - r) * (size + gap)  # first row highest
@@ -654,21 +768,47 @@ class plottingClass:
                     self.plotter.add_text(row_label, position=(x, y + 5), font_size=12)
                 for j, (feature, lbl) in enumerate(items):
                     bx = bx0 + j * pitch
+                    if feature in EXPANDER_GROUPS:  # parent token: reveals its members at the bottom-centre
+                        callback = self._make_parent_callback(feature)
+                        on = self._active_feature in EXPANDER_GROUPS[feature]
+                        target = ("parent", feature)
+                    else:
+                        callback = self._make_feature_callback(feature)
+                        on = (feature == self._feature_initial)
+                        target = ("feature", feature)
                     widget = self.plotter.add_checkbox_button_widget(
-                        self._make_feature_callback(feature, idx),
-                        value=(feature == self._feature_initial),
+                        callback, value=on,
                         position=(bx + 2, y), size=size, color_on="green", color_off="grey",
                     )
-                    self._feature_buttons.append(widget); idx += 1
+                    self._feature_buttons.append(widget)
+                    self._button_targets.append(target)
                     self.plotter.add_text(lbl, position=(bx + 2 + size + 4, y + 5), font_size=10)
 
-    def _make_feature_callback(self, feature: str, idx: int):
-        """Build the click callback for one feature button: enforce single-selection (radio) and
-        switch the active feature. Setting the other buttons' state does not re-fire callbacks."""
+    def _sync_left_radio(self, feature: str) -> None:
+        """Set the left-panel buttons so exactly the active feature (or the parent whose group contains it)
+        reads as selected. Called whenever the active feature changes; a no-op before the panel is built."""
+        if not getattr(self, "_button_targets", None):
+            return
+        for widget, (kind, key) in zip(self._feature_buttons, self._button_targets):
+            on = (kind == "feature" and key == feature) or (kind == "parent" and feature in EXPANDER_GROUPS[key])
+            widget.GetRepresentation().SetState(1 if on else 0)
+
+    def _make_feature_callback(self, feature: str):
+        """Build the click callback for one plain feature button: switch the active feature. The left-panel
+        radio is re-synced centrally by `_sync_left_radio` (via `_apply_scale`)."""
         def callback(state: bool) -> None:
-            for j, widget in enumerate(self._feature_buttons):
-                widget.GetRepresentation().SetState(1 if j == idx else 0)
             self._set_feature(feature)
+        return callback
+
+    def _make_parent_callback(self, parent: str):
+        """Build the click callback for an expander parent button: activate the group's current member (the
+        last one picked, else the first), which reveals the member sub-panel at the bottom-centre."""
+        def callback(state: bool) -> None:
+            member = self._group_current.get(parent) or EXPANDER_GROUPS[parent][0]
+            if self._feature_pointset.get(member) not in self._clouds:  # its cloud is empty -> first built member
+                member = next((m for m in EXPANDER_GROUPS[parent]
+                               if self._feature_pointset.get(m) in self._clouds), member)
+            self._set_feature(member)
         return callback
 
     def _add_scale_selector(self, size: int = 26, gap: int = 8) -> None:
@@ -739,11 +879,78 @@ class plottingClass:
             self._show_category_panel(self._active_feature)
             self._set_cat_mask()
 
+    # --- expander sub-panel (bottom-centre; a plain-gradient radio, shown only for a bodyThinning/segFlags
+    #     member — the members render exactly like a normal left-panel feature, unlike the categorical panel) -
+    def _add_member_selector(self, size: int = 26) -> None:
+        """Create the reusable pool of expander sub-panel radio buttons (bottom-centre, up to `_MAX_MEMBERS`).
+        All are parked off-screen; `_show_member_panel` positions + labels the ones the active parent needs.
+        Plain green/grey (same style as the left buttons). Needs a live interactor, so it runs last."""
+        self._member_size = size
+        self._sub_buttons = []
+        self._sub_labels = []
+        self._sub_slot_features = [None] * _MAX_MEMBERS
+        for j in range(_MAX_MEMBERS):
+            widget = self.plotter.add_checkbox_button_widget(
+                self._make_member_callback(j), value=False,
+                position=(-100.0, -100.0), size=size, color_on="green", color_off="grey")
+            self._sub_buttons.append(widget)
+            lbl = self.plotter.add_text("", position=(-100, -100), font_size=11, shadow=True)
+            lbl.SetVisibility(False)
+            self._sub_labels.append(lbl)
+        self._hide_member_panel()  # park the pool off-screen (else the creation position clamps to 0,0)
+        if self._active_feature in _MEMBER_TO_PARENT:  # initial feature is a group member -> show it now
+            self._show_member_panel(self._active_feature)
+
+    def _show_member_panel(self, feature: str) -> None:
+        """Assign the active member's parent-group features to the sub-panel slots: position + label the first
+        N at the upper-right (top-anchored, first member highest) with the active one selected (radio),
+        parking the rest off-screen. No-op until the pool exists. Members with no built cloud are skipped."""
+        if not self._sub_buttons:
+            return
+        parent = _MEMBER_TO_PARENT[feature]
+        members = [m for m in EXPANDER_GROUPS[parent] if self._feature_pointset.get(m) in self._clouds]
+        n, x, size, top_y = len(members), self._side_panel_x(), self._member_size, self._side_panel_top_y()
+        for j, (btn, lbl) in enumerate(zip(self._sub_buttons, self._sub_labels)):
+            if j < n:
+                m = members[j]
+                self._sub_slot_features[j] = m
+                y = top_y - j * (size + 8)  # first member highest (top-anchored, stacking downward)
+                btn.GetRepresentation().PlaceWidget([x, x + size, y, y + size, 0.0, 0.0])
+                btn.GetRepresentation().SetState(1 if m == feature else 0)
+                btn.GetRepresentation().SetVisibility(True)
+                btn.On()
+                lbl.SetInput(_MEMBER_LABEL.get(m, m))
+                lbl.SetPosition(x + size + 8, y + 4)
+                lbl.SetVisibility(True)
+            else:
+                self._sub_slot_features[j] = None
+                self._hide_one_checkbox(btn, lbl)
+        self._member_panel_active = True
+
+    def _hide_member_panel(self) -> None:
+        """Hide every expander sub-panel button + label (for a non-member / categorical feature)."""
+        if not self._sub_buttons:
+            return
+        for btn, lbl in zip(self._sub_buttons, self._sub_labels):
+            self._hide_one_checkbox(btn, lbl)
+        self._member_panel_active = False
+
+    def _make_member_callback(self, slot: int):
+        """Click handler for one sub-panel button: make that member the active feature (radio within the
+        group; the left parent stays selected via `_sync_left_radio`)."""
+        def callback(state: bool) -> None:
+            member = self._sub_slot_features[slot]
+            if member is not None:
+                self._set_feature(member)
+        return callback
+
     def _on_window_resize(self, *args) -> None:
         """ConfigureEvent handler: keep the bottom-anchored selectors pinned as the window resizes."""
         self._reposition_scale_selector()
         if self._cat_panel_active:  # re-centre the category panel at the new width
             self._show_category_panel(self._active_feature)
+        if self._member_panel_active:  # re-centre the expander sub-panel at the new width
+            self._show_member_panel(self._active_feature)
         self.plotter.render()
 
     def _make_scale_callback(self, mode: str, idx: int):
