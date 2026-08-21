@@ -56,6 +56,7 @@ Python/
 ├── datasetConfig.py                      # ACTIVE  central dataset paths (RAW / PLC / derived PROCESSED)
 ├── profileProcessing.py                  # ACTIVE  process entry point: raw → processed cache
 ├── dataAnalysis.py                       # ACTIVE  plot workbench (# %% cells): cache → 3D plot (raw "before" reconstructed)
+├── dataAnalysisSetup.py                  # ACTIVE  dataAnalysis workbench setup: imports, config, cached load() (any cell runnable first)
 ├── profilePointsClass.py                 # ACTIVE  profileData dataclass ONLY (pure data model)
 ├── profileProcessingAlgorithms.py        # ACTIVE  processing algorithms (rotate/level/smooth/width/flatness/runs)
 ├── segmentShape.py                       # ACTIVE  per-segment shape features (thinning / startup / rupture)

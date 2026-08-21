@@ -49,7 +49,8 @@ The system has two halves that meet at an HDF5 file:
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `datasetConfig.py` | The active experiment's file paths (`RAW_FILE`, `PLC_FILE`, derived `PROCESSED_FILE`) in one place, imported by both entry points so they can't drift. Switch datasets by moving the "ACTIVE" pair; others kept commented. | Active |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → join the PLC log by timestamp (trims to the overlap) → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
-| `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: load the processed cache ("after") and reconstruct raw ("before") by inverting the stored leveling transform, then plot flexibly in 3D (PyVista, native window) — raw, processed, and an overlay — plus the 2D feature-vs-time comparison and feature-vs-PLC correlation views. No processing on this path (uses the cache, not `process_profiles`). | Active |
+| `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: each cell self-bootstraps from `dataAnalysisSetup` (`from dataAnalysisSetup import …` + `raw, processed = load()`) so any cell can be run first, then plots flexibly in 3D (PyVista, native window) — a togglable preprocessing overlay + the feature heat-map — plus the 2D feature-vs-time comparison and feature-vs-PLC correlation views. No processing on this path (uses the cache, not `process_profiles`). | Active |
+| `dataAnalysisSetup.py` | **Workbench setup for `dataAnalysis`.** Imports, display config (PyVista + matplotlib Qt backend), the tunable constants (`PROFILE_STEP` / feature lists), and a cached `load()` (processed cache + raw reconstruction, loaded once per kernel; `load(force=True)` re-reads). Importable so every cell can be run first. | Active |
 | `LidarProfileAnalysis_oldRegistration.py` | Previous entry point built around the registration path. | Legacy |
 
 ---
@@ -176,10 +177,11 @@ the advance over each run and broadcasts the total: `segmentLength` (filament-se
 `defectLength` (length of a pure-floor / no-filament gap).
 `measure_segment_shape` (`segmentShape.py`) characterises how each segment's cross-section evolves along
 the print path — a **startup** ramp → overshoot bulge, a **body** plateau (slight taper), and usually an
-**abrupt terminal rupture** — broadcasting six per-segment values: `segmentBodyThinning` (%/mm) +
-`segmentBodyThinningStability` (thinning), `segmentCriticalArea` + `segmentRuptureLength` (rupture, at the
-derivative-cliff **rupture start**; NaN unless the segment ended thin per the `segmentRuptures` 0/1 gate),
-and `segmentHeadOvershoot` (startup). Only **discrete** segments are analysed — length in
+**abrupt terminal rupture** — broadcasting per-segment values: the **body thinning family** (the same taper
+measured on area / width (widthOuter) / height (heightP95): `segmentBody{Area,Width,Height}Thinning` (%/mm) +
+`segmentBody{Area,Width,Height}Steadiness` (-1..1)), `segmentCriticalArea` + `segmentRuptureLength` (rupture,
+at the derivative-cliff **rupture start**; NaN unless the segment ended thin per the `segmentRuptures` 0/1
+gate), and `segmentHeadOvershoot` (startup). Only **discrete** segments are analysed — length in
 [`SEGMENT_SHAPE_MIN_LENGTH_MM` (50 mm), `MAX_SEGMENT_LENGTH_MM` (600 mm)]; shorter ones give a noisy taper,
 longer ones are continuous filaments (above). The **body** is the plateau where the smoothed area stays
 within a ±band of `bodyLevel` — from where the ramp settles in to where it leaves the band, held a few mm
@@ -196,25 +198,42 @@ even on a sorted-out segment so the rupture *rate* survives; the sort-out is sha
 The plot workbench (`dataAnalysis.py`) draws floor vs filament in two colours (`category=`), flat
 profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
 (`"baseline"` / `"zeroBaseline"`), and both width methods' points (`"widthFlankPoints"` /
-`"widthOuterPoints"`). It can also colour the cloud by a per-profile feature with a live selector
-panel (`plot_feature_heatmap`; the feature buttons are grouped under Geometry / Segment / PLC headers).
+`"widthOuterPoints"`). The first 3D cell ("preprocessing") merges the raw/processed overlay, the floor/filament category, and the
+width-marker views into one scene with a **left-edge show/hide checkbox per layer** (`add_layer_toggles`;
+`plot()` and its `add_3d_points_to_plot` / `add_lines_to_plot` helpers return the added actor so it can be
+toggled). Every cell starts with `from dataAnalysisSetup import …` + `raw, processed = load()`, so any cell can be
+run first in a fresh kernel — `dataAnalysisSetup.load()` reads the cache + reconstructs raw once and caches it. It can
+also colour the cloud by a per-profile feature with a live selector panel (`plot_feature_heatmap`; the
+feature buttons are grouped under Geometry / Segment / PLC headers).
 Because features live on different point sets, the heat-map **prebuilds one cloud per point set**
 (`_feature_pointset`): filament geometry + PLC channels colour the **filament**
-points, while `defectLength` and the `isSegment` / `isNotFlat` / `isContinuousFilament` flags (which sit on
+points, while `defectLength` and the 0/1 segmentation flags (which sit on
 floor/gap profiles) colour **all** points. Switching within a point set only repoints the mapper (instant); crossing point
 sets swaps which cloud is drawn (filament-only ↔ all) while keeping the camera, and a single shared
 colour bar is re-tied to the active cloud. Selectable features include the geometry measures (width /
-height / area, grouped and shown in mm / mm²), the two filament-segment volumes (`segmentVolume` /
-`sliceVolume`, in cm³), the run lengths (`segmentLength` / `defectLength` in mm), the 0/1 segment flags,
-and each joined PLC channel — set by `FEATURE_DISPLAY` in `profile3Dplotting.py`. A bottom-right radio
-group switches the colour scale (linear / log / clip / rank) live. **`segmentShapeStatus`** (the only member
-of `CATEGORICAL_FEATURES`) is drawn with a distinct-colour discrete colormap instead of the gradient bar
-(its values are sort-out reason codes, not a scale). In place of the colour bar a bottom-centre **checkbox
-panel** appears — one colour-matched toggle per category (`_add_category_selector`); unchecking a category
-**greys those points out** (a companion NaN-mask array), so you can isolate e.g. just the tiny-body
-segments, and the scale-mode group is ignored. All the other code features — `segmentSection` (phase) and the
-0/1 flags (`isSegment` / `isNotFlat` / `isContinuousFilament` / `segmentRuptures`) — keep the plain gradient
-rendering (viridis + colour bar).
+height / area, grouped and shown in mm / mm²), the filament-segment volume (`segmentVolume`, cm³; the
+per-profile `sliceVolume` slab is a backend-only field, shown in no plot), the run lengths (`segmentLength` /
+`defectLength` in mm), the per-segment shape features, and each joined PLC channel — set by `FEATURE_DISPLAY`
+in `profile3Dplotting.py`. A bottom-right radio
+group switches the colour scale (linear / log / clip / rank) live.
+
+Two kinds of feature are grouped behind a **parent button** (`EXPANDER_GROUPS`): **`bodyThinning`** (the six
+body area/width/height thinning + steadiness members) and **`segFlags`** (the `isNotFlat` / `isSegment` /
+`isContinuousFilament` flags). Selecting a parent reveals its members as a **plain-gradient radio sub-panel**
+in the **upper-right** (`_add_member_selector` / `_show_member_panel`; top-anchored via `_side_panel_x` /
+`_side_panel_top_y`, clear of the centre print-path cloud, the bottom-centre colour bar, and the bottom-right
+scale selector), each rendered like a normal gradient feature (same button style, its own colour scale) — so a
+member is "shown as before". The members are ordinary features everywhere else: the 2D plots list them
+individually under Segment (they are in `SELECTOR_CATEGORIES`); only the 3D selector collapses each group to
+its parent (`_selector_tokens`). The one **categorical** feature (`CATEGORICAL_FEATURES`) is
+**`segmentShapeStatus`** (per-segment sort-out reason): its unordered codes are drawn with a distinct-colour
+discrete colormap instead of the gradient bar, and in its place an **upper-right multicolour checkbox panel**
+appears (`_add_category_selector`) — one colour-matched toggle per category; unchecking one **greys those
+points out** (a companion NaN-mask array),
+so you can isolate e.g. just the tiny-body segments, and the scale-mode group is ignored. `segmentSection`
+(phase) keeps the plain gradient rendering (viridis + colour bar). The Segment category's **debug** row holds
+`segFlags` / `sortout` (`segmentShapeStatus`) / `phase` (`segmentSection`); `segmentRuptures` is not a
+heat-map button (its per-segment gate is read off `segmentShapeStatus` code 6, "no rupture").
 
 For comparing features against each other (rather than one at a time in space),
 `featureComparison.compare_features` (matplotlib) plots several as time series on one axis. When **two or
@@ -240,10 +259,13 @@ level — a box/violin shape radio — or a hexbin density + central-per-quantil
 with a Spearman r; two or more → each collapses to one normalised-0–1 central±band trend line on a shared
 axis, with each feature's Spearman r in the legend (several boxes/densities can't overlay legibly). A
 median/mean radio switches the central statistic everywhere (median+IQR ↔ mean+std) and, in the single
-stepwise view, moves the central line on the box/violin. Live `CheckButtons` toggle the features and a
-`RadioButtons` list picks the x-channel; **constant channels are force-shown** (the viscotec pumps read 0
-in the current cache; their Spearman shows `n/a`). Selectable features are the per-profile geometry
-measures plus the broadcast segment/defect aggregates (`segmentVolume`/`segmentLength`/`defectLength`).
+stepwise view, moves the central line on the box/violin. Live `CheckButtons` toggle the features — **grouped
+by category** under Geometry / Segment / PLC headers (`_build_grouped_panel`, the same `group_by_category`
+layout used by the continuous view and `featureComparison`) — and a `RadioButtons` list picks the x-channel;
+**constant channels are force-shown** (the viscotec pumps read 0 in the current cache; their Spearman shows
+`n/a`). Selectable features are the per-profile geometry measures plus the broadcast segment/defect
+aggregates (`segmentVolume`/`segmentLength`/`defectLength`) and the shape features; the body **steadiness**
+values and `segmentRuptures` are **heat-map-only**, excluded from the 2D plots.
 In the stepwise view those **run features** are aggregated **per run** — one datapoint per segment/defect
 (detected with `profileProcessingAlgorithms._contiguous_runs` on the full profile list, since decimation
 would break run contiguity), not per profile — and each level shows an **`n=` count**, draws its
@@ -328,10 +350,10 @@ reads instead of ~N tiny per-group reads (measured **~142 s → ~5 s** on the 90
   median-smoothed; NaN when flat), `areaSimpson` / `areaShoelace` (filament cross-section, integration vs
   shoelace; NaN when flat), `segmentVolume` / `sliceVolume` (filament-segment total vs per-profile slab
   volume; unset for flat profiles), `segmentLength` (filament-run length; unset on flat) / `defectLength`
-  (pure-floor-run length; unset on non-flat), the six per-segment **shape** features
-  (`segmentBodyThinning`, `segmentBodyThinningStability`, `segmentCriticalArea`, `segmentRuptureLength`,
-  `segmentHeadOvershoot`, `segmentRuptures`; broadcast per segment, NaN off a rupture / on a too-short
-  segment or a continuous filament — `segmentCriticalArea` is the cross-section at the rupture start) plus
+  (pure-floor-run length; unset on non-flat), the per-segment **shape** features
+  (the body thinning family `segmentBody{Area,Width,Height}{Thinning,Steadiness}`, plus `segmentCriticalArea`,
+  `segmentRuptureLength`, `segmentHeadOvershoot`, `segmentRuptures`; broadcast per segment, NaN off a rupture /
+  on a too-short segment or a continuous filament — `segmentCriticalArea` is the cross-section at the rupture start) plus
   `segmentSection` (per-profile phase flag
   1/2/3 = body/rupture/overshoot-peak, NaN elsewhere; a heat-map debug view), `segmentShapeStatus` (per-segment
   shape-analysis sort-out reason 0-6: 0 kept / 1 too short / 2 continuous / 3 degenerate / 4 tiny body /

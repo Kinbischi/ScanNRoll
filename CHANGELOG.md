@@ -8,6 +8,29 @@ This project does not yet use formal version numbers; changes accumulate under
 
 ## [Unreleased]
 
+### Added
+- **Togglable 3D "preprocessing" cell (replaces the three static 3D cells).** One interactive `dataAnalysis`
+  cell with a **left-edge show/hide checkbox per layer** — raw (grey) & processed (green) clouds, the floor
+  baselines (red) + z=0 ref (yellow), the floor (brown) / filament (green) point categories, and the two
+  width-marker sets (flank = red, outer = blue) — each independently togglable (opens on the floor/filament
+  category view; the other layers start hidden). It subsumes the old **overlay**, **category**, and **width
+  markers** cells, which were removed. Backed by a small `plottingClass.add_layer_toggles(layers)` helper;
+  `plot()` and the `add_3d_points_to_plot` / `add_lines_to_plot` helpers now **return their actor** so callers
+  can toggle it (existing calls ignore the return, unchanged). Verified headless (all eight actors returned,
+  initial visibility + toggle callbacks, screenshots).
+- **`dataAnalysisSetup.py` — any `dataAnalysis` cell can be run first.** New workbench-setup module holding the
+  imports, display config (PyVista + the matplotlib Qt backend, set from the module via
+  `IPython.get_ipython()`), the tunable constants (`PROFILE_STEP` / feature lists), and a **cached `load()`**
+  (reads the processed cache + reconstructs raw once, in-process; `load(force=True)` re-reads after a
+  reprocess). Each `dataAnalysis` cell now starts with `from dataAnalysisSetup import …` + `raw, processed =
+  load()`, so **clicking any cell first in a fresh kernel works** (no more `NameError` from the setup cell not
+  having run) and is instant after the first load. Replaces the earlier in-file `ensure_loaded()` guard, which
+  couldn't help a truly cold kernel (its own definition lived in the un-run first cell).
+
+### Changed
+- **Heat-map body-taper parent button relabelled `bodyThinning` → `Thinning`** (the selector row is already
+  labelled `body`, so the button no longer repeats it). Feature keys unchanged.
+
 ### Performance
 - **Much faster processed-cache load (columnar "table" layout).** `save_profiles` now writes the
   processed cache as a columnar table — every per-profile field is one array keyed by profile index,
@@ -29,6 +52,40 @@ This project does not yet use formal version numbers; changes accumulate under
   index would overflow int64). Cuts the overlay cell's two voxel passes from ~13 s to ~2.5 s.
 
 ### Changed
+- **2D plots trimmed + fully grouped; heat-map sub-panels moved off-centre.** The body **steadiness** values
+  and `segmentRuptures` are now **heat-map-only** — removed from every 2D plot (feature-vs-time and both
+  feature-vs-PLC views) so those stay focused on the thinning rates + rupture geometry. The **stepwise**
+  feature panel is now **category-grouped** (Geometry / Segment / PLC headers via `_build_grouped_panel`),
+  matching the continuous view and `featureComparison` — the last flat feature list is gone. In the 3D heat
+  map, the expander member sub-panel and the `segmentShapeStatus` grey-out panel moved from the bottom-centre
+  (where they stacked over the print-path cloud) to the **upper-right** (`_side_panel_x` / `_side_panel_top_y`,
+  top-anchored), clear of the cloud, the colour bar, and the scale selector; the **camera-orientation gizmo**
+  moved from its default upper-right to the **upper-left** (`AnchorToUpperLeft`) so it no longer clashes with
+  those panels. The stepwise plot now also lists **both widths (flank/outer) and both heights (p95/smooth)**
+  like the other views, and the featurePlcTrends grouped-panel **checkboxes are larger** (box size 34 → 64).
+  Verified headless (heat-map screenshots of both panels top-right; grouped stepwise + continuous figures).
+- **Body thinning split into area / width / height (+ steadiness); heat-map parent buttons.** The single
+  body-taper feature is now a **family of six**, each measured over the same body plateau on a different
+  signal: `segmentBody{Area,Width,Height}Thinning` (%/mm) + `segmentBody{Area,Width,Height}Steadiness`
+  (Spearman, -1..1). This **renames** the old fields (`segmentBodyThinning` → `segmentBodyAreaThinning`,
+  `segmentBodyThinningStability` → `segmentBodyAreaSteadiness`) and **adds** the width (widthOuter) and height
+  (heightP95) versions — a **breaking cache-field change, so reprocess** (`python profileProcessing.py`) to
+  populate them. In the 3D heat map these six sit behind a **`bodyThinning` parent button**: selecting it
+  reveals the members as a **plain-gradient radio sub-panel** at the bottom-centre (`EXPANDER_GROUPS` /
+  `_add_member_selector`), each rendered like a normal gradient feature (own colour scale, no lag) rather
+  than the categorical grey-out panel. Labels renamed: rupture `start` → `critArea`; `steady` → `steadiness`.
+- **`segFlags` reverted to three plain-gradient buttons behind a parent.** The previous combined categorical
+  `segFlags` feature is removed; the flags `isNotFlat` / `isSegment` / `isContinuousFilament` are ordinary
+  gradient features again, grouped behind a **`segFlags` parent button** (same expander mechanism as
+  `bodyThinning`) — only `segmentShapeStatus` keeps the multicolour grey-out checkbox panel. No reprocess for
+  this part (the flag fields are unchanged). The Segment panel leads with the **run aggregates** row and ends
+  with a **debug** row `segFlags` / `sortout` / `phase`; the 2D plots still list every member individually
+  under Segment (`_selector_tokens` collapses to parents only in the 3D selector). Verified headless (cloud
+  build, parent↔member↔categorical panel transitions, radio sync, sub-panel clears the colour bar).
+- **`segmentRuptures` and `sliceVolume` stay out of the heat map.** `segmentRuptures` is not a heat-map button
+  (read its gate off `segmentShapeStatus` code 6, "no rupture") but remains a field + a stepwise
+  feature-vs-PLC series (rupture rate per belt speed). `sliceVolume` (the per-profile slab) is shown in **no
+  plot** — a backend-only field feeding `segmentVolume`.
 - **`segmentShapeStatus` gets a distinct-colour scheme + an interactive checkbox panel in the heat map.** The
   `CATEGORICAL_FEATURES` registry (`profile3Dplotting.py`) maps `segmentShapeStatus` (0-6 sort-out reasons) to
   `{code: label}`; when it is the active feature the cloud is coloured by a **discrete distinct-colour LUT**
