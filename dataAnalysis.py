@@ -50,6 +50,14 @@ plot_feature_plc_trends(processed, kind="continuous", features=DEFAULT_FEATURES,
                         initial_feature="widthFlank", initial_channel="pressurePrintHead", profile_step=5)
 
 
+# %% 2D per-segment proportionality — one point per segment; build x/y each as a product of feature^power terms, fit y=k·x + log-log exponent
+# Default tests: rollerbandSpeed · segmentCriticalWidth  vs  segmentCriticalArea²  (change the term radios for any other relation)
+from dataAnalysisSetup import load, plot_feature_proportion
+raw, processed = load()
+plot_feature_proportion(processed, x_terms=(("segmentCriticalArea", 2.0),),
+                        y_terms=(("rollerbandSpeed", 1.0), ("segmentCriticalWidth", 1.0)))
+
+
 # %% [TUNING — safe to delete] dial the floor/filament split live (shallow copies; pipeline untouched)
 import copy as _copy
 

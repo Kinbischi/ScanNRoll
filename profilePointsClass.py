@@ -45,6 +45,7 @@ class profileData:
     segmentBodyHeightThinning: Optional[float] = None     # body HEIGHT (heightP95) thinning rate (%/mm; negative = flattening)
     segmentBodyHeightSteadiness: Optional[float] = None   # steadiness of the height thinning (Spearman height vs arc-length, -1..1)
     segmentCriticalArea: Optional[float] = None     # cross-section at the rupture start / cliff top (mm^2)
+    segmentCriticalWidth: Optional[float] = None    # outer width at the rupture start / cliff top (mm; same profile as criticalArea)
     segmentRuptureLength: Optional[float] = None    # arc-length of the terminal rupture cliff (mm; short = abrupt)
     segmentHeadOvershoot: Optional[float] = None    # startup bulge height over the body level (%)
     segmentRuptures: Optional[float] = None         # 1.0 if the segment ended in a rupture, else 0.0

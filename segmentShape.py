@@ -40,6 +40,8 @@ THE FEATURES (broadcast onto every profile of the segment, like segmentVolume; p
   - `segmentHeadOvershoot` (%)            peak of the start ramp over bodyLevel = the initial bulge height.
   - `segmentCriticalArea` (mm^2)          S at rupture_start = the cross-section at which failure begins
                                           (a lower bound: the last cross-section still detected as filament).
+  - `segmentCriticalWidth` (mm)           widthOuter at rupture_start = the outer width at that same profile
+                                          (the width analogue of segmentCriticalArea).
   - `segmentRuptureLength` (mm)           arc-length rupture_start .. end = the cliff length (short = snap).
   - `segmentRuptures` (0/1)               did it rupture (gate above); its per-speed mean = the rupture rate.
   - `segmentSection` (1/2/3, else NaN)    per-profile DEBUG flag (varies within the segment): 1 body,
@@ -60,7 +62,8 @@ WHY THESE CHOICES (validated on 120 real Exp1 segments):
     (its edges land in dips/ramps for many segments). The band-body taper is self-robust (Spearman 0.99 to
     the band width, 0.998 to the smoothing) and representative.
   - A separate "rupture sharpness" was rejected as smoothing-fragile; `segmentRuptureLength` is the
-    abruptness measure. `segmentCriticalWidth` and `segmentSettleLength` were dropped as redundant/soft.
+    abruptness measure. `segmentSettleLength` was dropped as soft. `segmentCriticalWidth` (the outer width
+    at the same rupture profile as `segmentCriticalArea`) is kept for the per-segment proportionality checks.
   - Only *discrete* segments are analysed: length in [`SEGMENT_SHAPE_MIN_LENGTH_MM` (50 mm),
     `MAX_SEGMENT_LENGTH_MM` (600 mm)]. Below 50 mm the taper is noisy (a mm cut, not a profile-count cut, so it
     holds across belt speeds); above 600 mm the run is a continuous filament (`isContinuousFilament`), a
@@ -118,8 +121,8 @@ _STATUS_DEGENERATE, _STATUS_TINY_BODY, _STATUS_HIGH_WIDTH, _STATUS_NO_RUPTURE = 
 _SEGMENT_SHAPE_FIELDS = ("segmentBodyAreaThinning", "segmentBodyAreaSteadiness",
                          "segmentBodyWidthThinning", "segmentBodyWidthSteadiness",
                          "segmentBodyHeightThinning", "segmentBodyHeightSteadiness",
-                         "segmentCriticalArea", "segmentRuptureLength", "segmentHeadOvershoot",
-                         "segmentRuptures")
+                         "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength",
+                         "segmentHeadOvershoot", "segmentRuptures")
 
 def _median_smooth(y: np.ndarray, window: int) -> np.ndarray:
     """Centred nan-aware median filter (window in samples): each output is the median of the finite
@@ -291,12 +294,13 @@ def _segment_shape_values(s: np.ndarray, A: np.ndarray, W: np.ndarray, H: np.nda
         if ramp.size:
             peak = int(ramp[np.argmax(A[ramp])])
     out["segmentHeadOvershoot"] = 100.0 * (float(A[peak]) - body) / body if peak is not None else np.nan
-    # rupture (a KEPT segment ruptured): critical cross-section at the cliff top + the cliff length
+    # rupture (a KEPT segment ruptured): critical cross-section + outer width at the cliff top + the cliff length
     if rupture_start is not None:
-        out["segmentCriticalArea"] = _nearest_finite(A, rupture_start) * AREA_UNITS_TO_MM2   # mm^2
-        out["segmentRuptureLength"] = L - float(s[rupture_start])                            # mm
+        out["segmentCriticalArea"] = _nearest_finite(A, rupture_start) * AREA_UNITS_TO_MM2    # mm^2
+        out["segmentCriticalWidth"] = _nearest_finite(W, rupture_start) * PROFILE_UNITS_TO_MM  # mm
+        out["segmentRuptureLength"] = L - float(s[rupture_start])                             # mm
     else:
-        out["segmentCriticalArea"] = out["segmentRuptureLength"] = np.nan
+        out["segmentCriticalArea"] = out["segmentCriticalWidth"] = out["segmentRuptureLength"] = np.nan
 
     # per-profile section flag: NaN start/shoulder; body; rupture; a peak band around the overshoot point
     sections = np.full(s.size, np.nan)
@@ -325,6 +329,7 @@ def measure_segment_shape(profiles: list[profileData]) -> None:
                                          area (areaShoelace) / width (widthOuter) / height (heightP95); negative = thinning
     - `segmentBody{Area,Width,Height}Steadiness` (-1..1)  how steadily each thins (Spearman of the signal vs arc-length)
     - `segmentCriticalArea` (mm^2)       cross-section at the rupture cliff top (last detected before failure)
+    - `segmentCriticalWidth` (mm)        outer width at the rupture cliff top (same profile as criticalArea)
     - `segmentRuptureLength` (mm)        arc-length of the terminal cliff (short = abrupt snap)
     - `segmentHeadOvershoot` (%)         the start ramp's peak, over the body level ("wider at the start")
     - `segmentRuptures` (0/1)            whether the segment ended in a rupture (set on every valid-body run)

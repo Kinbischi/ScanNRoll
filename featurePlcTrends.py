@@ -57,7 +57,7 @@ CONTINUOUS_CHANNELS: tuple[str, ...] = (
 # 2D feature-vs-time / feature-vs-PLC plots stay focused on the thinning rates + rupture geometry).
 _SEGMENT_SHAPE_FEATURES = (
     "segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",
-    "segmentCriticalArea", "segmentRuptureLength", "segmentHeadOvershoot",
+    "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength", "segmentHeadOvershoot",
 )
 
 # Default y-features: per-profile geometry plus the broadcast segment/defect aggregates. NOTE the segment

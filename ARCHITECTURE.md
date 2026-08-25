@@ -40,12 +40,13 @@ The system has two halves that meet at an HDF5 file:
 | `rawProfileUdpCapturing.py` | Receive sensor UDP packets, parse the binary protocol, pair Z-profile + measurement blocks, write to HDF5. Owns `MeasurementData` and a wire-format `ProfileDataRaw`. | Active (standalone) |
 | `profilePointsClass.py` | Defines the analysis `profileData` dataclass **only** — the pure data model, no processing logic and no project imports. | Active |
 | `profileProcessingAlgorithms.py` | The processing functions that operate on lists of `profileData`: rotate, level, smooth, width detection, flatness flag, floor/filament categorisation, area, filament-segment volume, run lengths, segment-run cleanup, baseline fit, moving average (+ `FLATNESS_RMS_THRESHOLD`), and the along-track spacing helper `profile_advance_distances` (shared with the 3D layout). Imports only `profilePointsClass`. | Active |
-| `segmentShape.py` | `measure_segment_shape()` — per-segment shape features describing how a filament segment's cross-section evolves along the print path (startup bulge → body taper → abrupt rupture): `segmentBodyThinning`/`segmentBodyThinningStability` (fit over the ±band body plateau), `segmentCriticalArea` + `segmentRuptureLength` (at the derivative-cliff **rupture start**, gated by `segmentRuptures`), `segmentHeadOvershoot`, and a per-profile `segmentSection` flag (1 body / 2 rupture / 3 overshoot-peak; start + shoulder NaN). Broadcast per segment like the run aggregates. Imports `profilePointsClass` + `profileProcessingAlgorithms` (run helpers + spacing). | Active |
+| `segmentShape.py` | `measure_segment_shape()` — per-segment shape features describing how a filament segment's cross-section evolves along the print path (startup bulge → body taper → abrupt rupture): `segmentBodyThinning`/`segmentBodyThinningStability` (fit over the ±band body plateau), `segmentCriticalArea` + `segmentCriticalWidth` + `segmentRuptureLength` (all read at the derivative-cliff **rupture start**, gated by `segmentRuptures`), `segmentHeadOvershoot`, and a per-profile `segmentSection` flag (1 body / 2 rupture / 3 overshoot-peak; start + shoulder NaN). Broadcast per segment like the run aggregates. Imports `profilePointsClass` + `profileProcessingAlgorithms` (run helpers + spacing). | Active |
 | `profileLoading.py` | `load_profiles()` / `save_profiles()` — read/write `profileData` to HDF5. `save_profiles` writes the processed cache as a **columnar table** (padded `[N,L]` points, `[N,2]` index pairs, `[N]` scalar columns, names) for fast bulk loading; `load_profiles` reads that, and reads raw acquisition files (`x`/`z` + `arrival_time`, rest ignored), but **rejects** an old per-group *processed* cache with a "reprocess" error. `read_file_attrs()` returns file-level attributes (e.g. `raw_start`/`raw_end`). | Active |
 | `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). `PLC_COLUMNS` = the 10 raw CSV channels (drives parsing); `ALL_PLC_COLUMNS` = those + `DERIVED_PLC_COLUMNS` (e.g. `pipePressureDifference`, a `profileData` property) = the channel set the plots offer. Imports only `profilePointsClass`. | Active |
 | `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, via `profile_advance_distances`, imported from `profileProcessingAlgorithms`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
 | `featureComparison.py` | `compare_features()` — matplotlib 2D comparison of per-profile features + PLC channels over time: several shown → robustly normalised 0–1 overlay (percentile-clipped so outliers don't flatten it), a lone curve → its real units on a self-scaled axis. Category-grouped, colour-matched `CheckButtons` panel to toggle/smooth curves. Imports `profilePointsClass` + `FEATURE_DISPLAY` + `group_by_category`. | Active |
 | `featurePlcTrends.py` | `plot_feature_plc_trends()` — matplotlib 2D feature-vs-PLC correlation plot, one `kind` per call: `"stepwise"` (discrete channel on x → box/violin per level) or `"continuous"` (hexbin density + trend, with **any subject on either axis** — a shared feature+channel pool feeds a single-select x-picker and multi-select y-panel, both category-grouped, so feature-vs-channel / channel-vs-channel / feature-vs-feature all work); Spearman r; several y → normalised 0–1 trend lines. Live median/mean statistic radio, and (stepwise) a box/violin shape radio + channel radio; constant channels force-shown; idle excluded; fixed x-axis (stepwise). Segment/defect features are aggregated **per run** in the stepwise view (one point per segment/defect) with `n=` counts, a >3-runs box rule, and >0.5 m / cross-level exclusions. Reuses `featureComparison`'s value/scale helpers, `FEATURE_DISPLAY`, `group_by_category`, and `profileProcessingAlgorithms._contiguous_runs`. | Active |
+| `featureProportion.py` | `plot_feature_proportion()` — matplotlib **per-segment** proportionality scatter (one point per filament segment, run-collapsed like the stepwise run features). Each axis is a **product of up to two `feature ^ power` terms**, built live from four radio columns (x·term1/2, y·term1/2 + a power radio each), so you can test relations like `rollerbandSpeed · segmentCriticalWidth ∝ segmentCriticalArea²` (the default). Two readouts: a through-origin fit `y = k·x` (k, R², Pearson r) and the log-log fitted exponent m (the measured power); a linear/log-log axes toggle. Per-segment scalars = nan-median over the segment's non-idle profiles (a broadcast feature = its constant); colour = per-segment `rollerbandSpeed`. Reuses `featureComparison._feature_values`, `FEATURE_DISPLAY`, and `profileProcessingAlgorithms._contiguous_runs`/`_segment_mask`. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `datasetConfig.py` | The active experiment's file paths (`RAW_FILE`, `PLC_FILE`, derived `PROCESSED_FILE`) in one place, imported by both entry points so they can't drift. Switch datasets by moving the "ACTIVE" pair; others kept commented. | Active |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → join the PLC log by timestamp (trims to the overlap) → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
@@ -67,15 +68,17 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
    │    │                   ▲
    │    │                   └── featureComparison   matplotlib 2D feature overlay (imports FEATURE_DISPLAY)
    │    │                             ▲
-   │    │                             └── featurePlcTrends   matplotlib 2D feature-vs-PLC plot
-   │    │                                 (imports featureComparison helpers + FEATURE_DISPLAY + group_by_category)
+   │    │                             ├── featurePlcTrends   matplotlib 2D feature-vs-PLC plot
+   │    │                             │   (imports featureComparison helpers + FEATURE_DISPLAY + group_by_category)
+   │    │                             └── featureProportion  matplotlib 2D per-segment proportionality scatter
+   │    │                                 (imports featureComparison._feature_values + FEATURE_DISPLAY + run helpers)
    │    └──────────── profileProcessingAlgorithms  processing fns + FLATNESS_RMS_THRESHOLD
    │                        ▲
    └── profileLoading ──────┘               HDF5 I/O (also imports FLATNESS_RMS_THRESHOLD)
 
  Entry points compose the above (both also import datasetConfig for the file paths):
    profileProcessing → profileLoading + profileProcessingAlgorithms + plcData                        (process)
-   dataAnalysis      → profileLoading + profile3Dplotting + plcData + featureComparison + featurePlcTrends   (plot)
+   dataAnalysis      → profileLoading + profile3Dplotting + plcData + featureComparison + featurePlcTrends + featureProportion   (plot)
 
  profileRegistration       LEGACY / dormant — imports profilePointsClass (wildcard), off active path
  rawProfileUdpCapturing    standalone — imports only stdlib + numpy + h5py
@@ -89,11 +92,13 @@ import `profilePointsClass`; `profileLoading` also imports `profileProcessingAlg
 `group_by_category`); and
 `featurePlcTrends` imports `featureComparison` (the `_feature_values`/`_scale_range`/`_normalise`
 helpers) + `profile3Dplotting` (`FEATURE_DISPLAY`, `group_by_category`) + `profilePointsClass`
-(and `scipy.stats.spearmanr`); and `segmentShape` imports `profilePointsClass` +
+(and `scipy.stats.spearmanr`); and `featureProportion` imports `featureComparison` (`_feature_values`) +
+`profile3Dplotting` (`FEATURE_DISPLAY`) + `profileProcessingAlgorithms` (`_contiguous_runs`/`_segment_mask`) +
+`profilePointsClass`; and `segmentShape` imports `profilePointsClass` +
 `profileProcessingAlgorithms` (run helpers + `profile_advance_distances`) + `scipy.stats`. The entry
 points compose these: `profileProcessing` imports `profileLoading` + `profileProcessingAlgorithms` +
 `segmentShape` + `plcData`; `dataAnalysis` imports `profileLoading` + `profile3Dplotting` + `plcData` +
-`featureComparison` + `featurePlcTrends`. No cycles.
+`featureComparison` + `featurePlcTrends` + `featureProportion`. No cycles.
 
 - `profilePointsClass` is the foundation; everything depends on it.
 - The active analysis modules now use **explicit** imports; only the dormant

@@ -9,6 +9,25 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Added
+- **Per-segment proportionality plot (`featureProportion.plot_feature_proportion`) + a `dataAnalysis` cell.**
+  A new matplotlib module: one point per filament **segment** (run-collapsed like the stepwise run features),
+  scattering two composed expressions to test whether one is proportional to another. Each axis is a **product
+  of up to two `feature ^ power` terms**, built live from four radio columns (x·term1/2, y·term1/2, each with
+  a power radio); the default config is the hypothesis `rollerbandSpeed · segmentCriticalWidth ∝
+  segmentCriticalArea²`. Two readouts: a **through-origin fit** `y = k·x` (k, R², Pearson r) and a **log-log
+  fitted exponent** m (the *measured* power between the axes), with a linear/log-log axes toggle that draws the
+  matching line. Per-segment scalars = nan-median over the segment's non-idle profiles (a broadcast feature =
+  its constant value); points coloured by per-segment `rollerbandSpeed`; runs > 0.5 m dropped. Reuses
+  `featureComparison._feature_values`, `FEATURE_DISPLAY`, and the `_contiguous_runs`/`_segment_mask` run
+  helpers. Verified headless (synthetic segments with a planted relation recover k, R²≈1 and the log-log
+  slope; layout + both axes scales screenshotted; real-cache slice smoke).
+- **`segmentCriticalWidth` per-segment feature.** The outer width (`widthOuter`) at the **same rupture-onset
+  profile** where `segmentCriticalArea` is measured — the width analogue of the critical area, stored in mm
+  (mirrors `segmentCriticalArea` line-for-line in `segmentShape._segment_shape_values`; `None`/NaN off a
+  rupture). Wired into `FEATURE_DISPLAY` / `SELECTOR_CATEGORIES` / `FEATURE_UI` (heat-map `rupture` row: critArea
+  / critWidth / length), the 2D feature lists (`featurePlcTrends._SEGMENT_SHAPE_FEATURES`), and
+  `dataAnalysisSetup` (`SEGMENT_SHAPE_FEATURES` + `HEATMAP_FEATURES`). **Needs a cache reprocess**
+  (`python profileProcessing.py`) to populate — the old cache loads it as `None`.
 - **Togglable 3D "preprocessing" cell (replaces the three static 3D cells).** One interactive `dataAnalysis`
   cell with a **left-edge show/hide checkbox per layer** — raw (grey) & processed (green) clouds, the floor
   baselines (red) + z=0 ref (yellow), the floor (brown) / filament (green) point categories, and the two

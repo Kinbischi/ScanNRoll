@@ -36,6 +36,7 @@ FEATURE_DISPLAY = {
     "segmentBodyWidthSteadiness": ("segmentBodyWidthSteadiness", 1.0, ""),
     "segmentBodyHeightSteadiness":("segmentBodyHeightSteadiness", 1.0, ""),
     "segmentCriticalArea":      ("segmentCriticalArea", 1.0, "mm^2"),
+    "segmentCriticalWidth":     ("segmentCriticalWidth", 1.0, "mm"),
     "segmentRuptureLength":     ("segmentRuptureLength", 1.0, "mm"),
     "segmentHeadOvershoot":     ("segmentHeadOvershoot", 1.0, "%"),
     "segmentRuptures":          ("segmentRuptures", 1.0, ""),
@@ -160,7 +161,7 @@ SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
                  "segmentHeadOvershoot",                                               # startup phase
                  "segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",       # body thinning \
                  "segmentBodyAreaSteadiness", "segmentBodyWidthSteadiness", "segmentBodyHeightSteadiness",  # + steadiness -> bodyThinning parent
-                 "segmentCriticalArea", "segmentRuptureLength", "segmentRuptures",    # rupture phase
+                 "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength", "segmentRuptures",  # rupture phase
                  "isNotFlat", "isSegment", "isContinuousFilament",                    # seg flags -> segFlags parent
                  "segmentShapeStatus", "segmentSection")),                            # debug: sortout / phase
     ("PLC", ALL_PLC_COLUMNS),
@@ -177,6 +178,7 @@ FEATURE_UI: dict[str, tuple[str, str]] = {
     "segmentHeadOvershoot":     ("startup", "overshoot"),
     "bodyThinning":             ("body", "Thinning"),      # parent token -> expands to the thinning/steadiness members ("body" is the row label)
     "segmentCriticalArea":      ("rupture", "critArea"),   # cross-section at the rupture start (segmentRuptures
+    "segmentCriticalWidth":     ("rupture", "critWidth"),  # outer width at the same rupture profile
     "segmentRuptureLength":     ("rupture", "length"),     # dropped from the heat map -> read it off `sortout`)
     "segFlags":                 ("debug", "segFlags"),    # parent token -> expands to notFlat/isSeg/contFil
     "segmentShapeStatus":       ("debug", "sortout"),     # per-segment sort-out reason (0-6)

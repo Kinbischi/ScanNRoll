@@ -13,6 +13,7 @@ import profile3Dplotting
 from datasetConfig import PROCESSED_FILE
 from featureComparison import compare_features
 from featurePlcTrends import DEFAULT_FEATURES, plot_feature_plc_trends
+from featureProportion import PROPORTION_SUBJECTS, plot_feature_proportion
 from plcData import ALL_PLC_COLUMNS
 from profileLoading import load_profiles, read_file_attrs
 from profileProcessingAlgorithms import unlevel_profiles
@@ -38,7 +39,8 @@ VOXEL_SIZE = 10    # keep one point per cube of this edge (profile units, 0.01 m
 # — compared per speed level. The body steadiness values + segmentRuptures are heat-map-only (see
 # HEATMAP_FEATURES), so they are excluded here; the stepwise plot focuses on the thinning rates + geometry.
 SEGMENT_SHAPE_FEATURES = ("segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",
-                          "segmentCriticalArea", "segmentRuptureLength", "segmentHeadOvershoot")
+                          "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength",
+                          "segmentHeadOvershoot")
 
 # y-features for the stepwise feature-vs-PLC cell (+ the derived pipePressureDifference, per level).
 # Both width measures (flank/outer) and both heights (p95/smooth) are included, as in the heat map / other 2D plots.
@@ -53,7 +55,7 @@ HEATMAP_FEATURES = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "ar
                     "segmentVolume", "segmentLength", "defectLength", "segmentHeadOvershoot",
                     "segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",
                     "segmentBodyAreaSteadiness", "segmentBodyWidthSteadiness", "segmentBodyHeightSteadiness",
-                    "segmentCriticalArea", "segmentRuptureLength",   # segmentRuptures -> read off segmentShapeStatus
+                    "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength",  # segmentRuptures -> read off segmentShapeStatus
                     "isNotFlat", "isSegment", "isContinuousFilament",
                     "segmentShapeStatus", "segmentSection")
 
@@ -78,5 +80,6 @@ def load(force: bool = False) -> "tuple[list, list]":
 # Public workbench surface: what the dataAnalysis cells import from here (data loader + the plot entry points,
 # re-exported modules/constants, and the tunable config). Declared so re-exports don't read as unused imports.
 __all__ = ["load", "profile3Dplotting", "compare_features", "plot_feature_plc_trends",
-           "ALL_PLC_COLUMNS", "DEFAULT_FEATURES", "PROFILE_STEP", "POINT_STEP", "VOXEL_SIZE",
+           "plot_feature_proportion", "ALL_PLC_COLUMNS", "DEFAULT_FEATURES", "PROPORTION_SUBJECTS",
+           "PROFILE_STEP", "POINT_STEP", "VOXEL_SIZE",
            "SEGMENT_SHAPE_FEATURES", "PLC_FEATURES", "HEATMAP_FEATURES"]
