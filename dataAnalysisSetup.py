@@ -45,7 +45,8 @@ SEGMENT_SHAPE_FEATURES = ("segmentBodyAreaThinning", "segmentBodyWidthThinning",
 # y-features for the stepwise feature-vs-PLC cell (+ the derived pipePressureDifference, per level).
 # Both width measures (flank/outer) and both heights (p95/smooth) are included, as in the heat map / other 2D plots.
 PLC_FEATURES = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace",
-                "segmentVolume", "segmentLength", "defectLength", "pipePressureDifference",
+                "segmentVolume", "segmentLength", "defectLength",
+                "pipePressureDifference", "conveyorExtrusionVelocityDifference",
                 *SEGMENT_SHAPE_FEATURES)
 
 # Heat-map features: geometry + PLC colour the filament points; defectLength, the 0/1 flags, the segmentSection

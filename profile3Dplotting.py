@@ -54,6 +54,15 @@ FEATURE_DISPLAY = {
     # each its own colour group, since their magnitudes differ widely. Shown in the PLC's native
     # engineering units (factor 1.0; the unit label is left blank as the units aren't recorded in the CSV).
     **{name: (name, 1.0, "") for name in ALL_PLC_COLUMNS},
+    # PLC channels whose real units ARE known -> label them (overrides the blank above). Beyond nicer axis
+    # labels, this lets the "keep units" overlay put same-unit features on one real axis: rollerbandSpeed
+    # shares m/s with flowVelocity, and the pump flows share a convertible flow family (see shared_unit).
+    "flowVelocity": ("flowVelocity", 1.0, "m/s"),   # total pump flow / nozzle area (m/s; comparable to rollerbandSpeed)
+    "conveyorExtrusionVelocityDifference": ("conveyorExtrusionVelocityDifference", 1.0, "m/s"),  # rollerbandSpeed - flowVelocity
+    "rollerbandSpeed": ("rollerbandSpeed", 1.0, "m/s"),
+    "mortarPumpFlow": ("mortarPumpFlow", 1.0, "L/min"),
+    "viscoPump1_VMAflow": ("viscoPump1_VMAflow", 1.0, "mL/min"),
+    "viscoPump2_AcceleratorFlow": ("viscoPump2_AcceleratorFlow", 1.0, "mL/min"),
 }
 
 # Discrete/categorical features: their values are CODES for distinct categories, not a continuous scale, so
@@ -190,6 +199,7 @@ _PLC_LABEL: dict[str, str] = {
     "pressurePrintHead": "pPrintHead", "printHeadMixxingSpeed": "mixSpeed", "printHeadTorque": "torque",
     "rollerbandHeight": "rbHeight", "rollerbandSpeed": "rbSpeed", "viscoPump1_VMAflow": "visco1",
     "viscoPump2_AcceleratorFlow": "visco2", "pipePressureDifference": "pPipeDiff",
+    "flowVelocity": "flowVel", "conveyorExtrusionVelocityDifference": "conv-extrVel",
 }
 _PLC_PER_ROW = 2       # PLC channels packed this many per selector row
 _SELECTOR_CHAR_PX = 11  # approx px per character (button labels, font 10) for sizing each row's button pitch

@@ -40,7 +40,8 @@ PLC_COLUMNS: tuple[str, ...] = (
 # `profileData` @property (e.g. `pipePressureDifference = pressurePipeStart - pressurePipeEnd`), so it
 # needs no cache slot. `PLC_COLUMNS` alone drives CSV parsing; `ALL_PLC_COLUMNS` is the channel set the
 # plots offer (raw + derived) — use it in FEATURE_DISPLAY, the selector grouping, and the plot cells.
-DERIVED_PLC_COLUMNS: tuple[str, ...] = ("pipePressureDifference",)
+DERIVED_PLC_COLUMNS: tuple[str, ...] = (
+    "pipePressureDifference", "flowVelocity", "conveyorExtrusionVelocityDifference")
 ALL_PLC_COLUMNS: tuple[str, ...] = PLC_COLUMNS + DERIVED_PLC_COLUMNS
 
 # Windows FILETIME counts 100 ns ticks since 1601-01-01 UTC; convert to Unix seconds by

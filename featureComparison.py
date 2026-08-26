@@ -1,9 +1,11 @@
 """Interactive 2D comparison of several per-profile features over the run.
 
 A matplotlib line plot: each selected `profileData` feature (geometry measure or joined PLC channel)
-is drawn against time. With two or more shown they are robustly normalised to 0-1 so features on very
-different scales (torque ~1.5, width ~4000 units, flow ~0-1) share one axis; with exactly one shown it
-is drawn in its **real units** on a self-scaled axis. A left panel grouped by category (Geometry /
+is drawn against time. With exactly one shown it is drawn in its **real units** on a self-scaled axis.
+With two or more shown, an **"overlay y-axis" toggle** decides: "keep unit" (default) keeps them in their
+real unit when they share one (mm with mm, mm^2 with mm^2, or a convertible family like the pump flows —
+see `shared_unit`), otherwise they are robustly normalised to 0-1 so features on very different scales
+(torque, width, flow) still share one axis ("scale", or "keep unit" with mixed units). A left panel grouped by category (Geometry /
 Segment / PLC) toggles each curve's visibility ("show", tinted to match its curve) and whether it is
 smoothed ("smooth"); a slider sets the smoothing window. Complements the 3D filament heat-map
 (`profile3Dplotting.plot_feature_heatmap`), which colours one feature at a time in space; here many
@@ -14,7 +16,7 @@ import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
-from matplotlib.widgets import CheckButtons, Slider
+from matplotlib.widgets import CheckButtons, RadioButtons, Slider
 
 from profile3Dplotting import FEATURE_DISPLAY, group_by_category  # unit factor/label + shared grouping
 from profilePointsClass import profileData
@@ -46,6 +48,43 @@ def _normalise(vals: np.ndarray, lo: float, hi: float) -> np.ndarray:
     if hi <= lo:  # constant / degenerate feature: draw it flat rather than divide by ~0
         return np.where(np.isfinite(vals), 0.5, np.nan)
     return np.clip((vals - lo) / (hi - lo), 0.0, 1.0)
+
+
+# "Keep units if possible" overlay: unit LABEL -> (family, factor from that label to the family's canonical
+# display unit). A label absent here is its OWN family with factor 1.0 (so identical labels share an axis,
+# different ones don't). A blank "" unit is never shareable (many PLC channels use "" for different, unknown
+# quantities). List here only the cross-label conversions — e.g. mL/min -> L/min so the pump flows can share
+# one flow axis (the user's example). To add a convertible family, list every member unit with its factor to
+# the shared canonical unit.
+_UNIT_FAMILY: dict[str, tuple[str, float]] = {
+    "mL/min": ("L/min", 1e-3),   # 1 mL/min = 0.001 L/min
+    "L/min":  ("L/min", 1.0),
+}
+
+
+def shared_unit(features: "list[str] | tuple[str, ...]") -> "tuple[str, dict[str, float]] | None":
+    """Common real-unit axis for an overlay, if the features share one unit family.
+
+    Returns `(display_unit, {feature: factor})` where each feature's physical values × its factor land in
+    `display_unit` — so same-unit features (mm with mm, mm^2 with mm^2, or a convertible family like the
+    pump flows) can be drawn on ONE real axis instead of the normalised 0-1 overlay. Returns None (→ keep
+    normalising) if the features span different families or any has a blank/unknown unit.
+    """
+    if not features:
+        return None
+    conv: dict[str, float] = {}
+    canon: "str | None" = None
+    for f in features:
+        unit = FEATURE_DISPLAY[f][2]
+        if not unit:                       # blank/unknown unit -> not shareable
+            return None
+        fam, factor = _UNIT_FAMILY.get(unit, (unit, 1.0))
+        if canon is None:
+            canon = fam
+        elif fam != canon:                 # a different unit family -> fall back to normalising
+            return None
+        conv[f] = factor
+    return canon, conv
 
 
 def _smooth(vals: np.ndarray, window: int) -> np.ndarray:
@@ -104,6 +143,7 @@ class FeatureComparisonPlot:
         self._smoothed: dict[str, bool] = {f: f in initial_smooth for f in self.features}
         self._window = max(1, int(smooth_window_init))
         self._clip = clip_percentile  # for the normalised-overlay y-label
+        self._ymode = "keep"          # overlay y-axis: "keep" real units when the shown share one, else "scale" (0-1)
 
         # --- figure + axes: grouped checkbox panel (smooth | show columns) on the left, plot centre,
         #     slider below, legend right. The panel is inset from the left edge (no more clipping) and
@@ -145,6 +185,15 @@ class FeatureComparisonPlot:
                               valinit=self._window, valstep=1)
         self._slider.label.set_fontsize(11)
         self._slider.on_changed(self._on_window)
+
+        # overlay y-axis mode: "keep unit" (default; real unit when the shown curves share one) vs "scale"
+        ymode_ax = self.fig.add_axes((0.028, 0.005, 0.135, 0.075), frame_on=True)
+        ymode_ax.set_title("overlay y-axis", fontsize=9)
+        self._ymode_radio = RadioButtons(ymode_ax, ["keep unit", "scale"],
+                                         active=(0 if self._ymode == "keep" else 1))
+        for t in self._ymode_radio.labels:
+            t.set_fontsize(9)
+        self._ymode_radio.on_clicked(self._on_ymode)
 
         self._apply_display()  # set the initial y-axis (real units vs normalised) for the initial selection
         logger.info("Comparing %d features over %d profiles (step %d)",
@@ -233,12 +282,32 @@ class FeatureComparisonPlot:
                 lo, hi = float(np.min(finite)), float(np.max(finite))
                 pad = 0.04 * (hi - lo) if hi > lo else (abs(hi) * 0.04 or 1.0)
                 self.ax.set_ylim(lo - pad, hi + pad)
-        else:  # 0 or 2+ curves -> shared normalised overlay
-            for f in self.features:
-                self._lines[f].set_ydata(self._series(f))
-            p_lo, p_hi = self._clip
-            self.ax.set_ylabel(f"normalised per feature (robust {p_lo:g}-{p_hi:g} pct -> 0-1)", fontsize=12)
-            self.ax.set_ylim(-0.03, 1.03)
+        else:  # 0 or 2+ curves -> real-unit overlay if they share a unit ("keep"), else normalised 0-1
+            scale = shared_unit(visible) if self._ymode == "keep" else None
+            if scale is not None:
+                unit, conv = scale
+                allv = []
+                for f in self.features:
+                    if f in conv:  # a shown, same-unit curve -> real values (converted to the shared unit)
+                        yv = self._phys_series(f) * conv[f]
+                        self._lines[f].set_ydata(yv)
+                        fin = yv[np.isfinite(yv)]
+                        if fin.size:
+                            allv.append(fin)
+                    else:          # hidden (its unit may differ) -> blank until shown
+                        self._lines[f].set_ydata(np.full(self._x.shape, np.nan))
+                self.ax.set_ylabel(f"value [{unit}]", fontsize=12)
+                if allv:
+                    cat = np.concatenate(allv)
+                    lo, hi = float(cat.min()), float(cat.max())
+                    pad = 0.04 * (hi - lo) if hi > lo else (abs(hi) * 0.04 or 1.0)
+                    self.ax.set_ylim(lo - pad, hi + pad)
+            else:
+                for f in self.features:
+                    self._lines[f].set_ydata(self._series(f))
+                p_lo, p_hi = self._clip
+                self.ax.set_ylabel(f"normalised per feature (robust {p_lo:g}-{p_hi:g} pct -> 0-1)", fontsize=12)
+                self.ax.set_ylim(-0.03, 1.03)
 
     def _style_legend(self, f: str) -> None:
         """Bold black text for a visible curve, normal grey for a hidden one (colour swatch stays)."""
@@ -270,6 +339,12 @@ class FeatureComparisonPlot:
     def _on_window(self, val: float) -> None:
         """Slider moved: re-smooth (and re-scale, in the single-curve view) the plotted curves."""
         self._window = int(val)
+        self._apply_display()
+        self.fig.canvas.draw_idle()
+
+    def _on_ymode(self, label: str) -> None:
+        """Overlay y-axis toggle: 'keep unit' draws same-unit curves in their real unit, 'scale' normalises."""
+        self._ymode = "keep" if label == "keep unit" else "scale"
         self._apply_display()
         self.fig.canvas.draw_idle()
 

@@ -46,7 +46,8 @@ PROPORTION_SUBJECTS: tuple[str, ...] = (
     "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength", "segmentHeadOvershoot",
     "segmentVolume", "segmentLength",
     "widthOuter", "widthFlank", "heightP95", "areaShoelace",
-    "rollerbandSpeed", "pressurePrintHead", "printHeadTorque",
+    "rollerbandSpeed", "flowVelocity", "conveyorExtrusionVelocityDifference",
+    "pressurePrintHead", "printHeadTorque",
 )
 # Default axis terms = the user's hypothesis: x = segmentCriticalArea²,  y = rollerbandSpeed × segmentCriticalWidth.
 DEFAULT_X_TERMS: tuple[tuple[str, float], ...] = (("segmentCriticalArea", 2.0),)

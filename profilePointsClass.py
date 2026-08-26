@@ -2,6 +2,19 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Optional
 
+# --- flowVelocity: nozzle geometry + pump-flow unit conversions (see profileData.flowVelocity) ---
+NOZZLE_DIAMETER_M = 0.02                                          # round nozzle, 2 cm diameter
+NOZZLE_AREA_M2 = float(np.pi * (NOZZLE_DIAMETER_M / 2.0) ** 2)    # nozzle cross-section (~3.1416e-4 m^2)
+# Convert each pump channel's raw PLC unit to a COMMON volumetric flow in m^3/s before summing, so the
+# total / nozzle area comes out in m/s (directly comparable to rollerbandSpeed). The mortar pump reports
+# L/min; both viscotec pumps report mL/min. (In Exp1 the viscotec pumps read 0, so only the mortar pump
+# contributes here; the viscotec factors matter for datasets where those pumps run.)
+FLOW_TO_M3_PER_S = {
+    "mortarPumpFlow": 1e-3 / 60.0,             # L/min  -> m^3/s
+    "viscoPump1_VMAflow": 1e-6 / 60.0,         # mL/min -> m^3/s
+    "viscoPump2_AcceleratorFlow": 1e-6 / 60.0,  # mL/min -> m^3/s
+}
+
 @dataclass
 class profileData:
     name: str
@@ -85,6 +98,33 @@ class profileData:
         if self.pressurePipeStart is None or self.pressurePipeEnd is None:
             return None
         return self.pressurePipeStart - self.pressurePipeEnd
+
+    @property
+    def flowVelocity(self) -> Optional[float]:
+        """Extrusion velocity through the nozzle (m/s): total volumetric pump flow / nozzle cross-section.
+
+        total flow = mortarPumpFlow (L/min) + viscoPump1_VMAflow + viscoPump2_AcceleratorFlow (both
+        mL/min), each converted to m^3/s (`FLOW_TO_M3_PER_S`), divided by the round-nozzle area
+        (`NOZZLE_AREA_M2`, 2 cm diameter). The result is in m/s, so it is directly comparable to
+        `rollerbandSpeed`. Derived from the joined PLC channels, not a stored field, so it needs no cache
+        slot and no reprocess. None if all three flow channels are missing (a pump reading 0 counts as 0)."""
+        names = ("mortarPumpFlow", "viscoPump1_VMAflow", "viscoPump2_AcceleratorFlow")
+        vals = [getattr(self, n) for n in names]
+        if all(v is None for v in vals):
+            return None
+        total = sum(FLOW_TO_M3_PER_S[n] * (v or 0.0) for n, v in zip(names, vals))  # m^3/s
+        return total / NOZZLE_AREA_M2                                               # m/s
+
+    @property
+    def conveyorExtrusionVelocityDifference(self) -> Optional[float]:
+        """Conveyor-minus-extrusion velocity (m/s): `rollerbandSpeed - flowVelocity`. Positive = the belt
+        outruns extrusion (stretching / thinning); negative = material leaves the nozzle faster than the belt
+        carries it away (over-supply / bead thickens). Both terms are m/s. Derived from the joined PLC
+        channels, so it needs no cache slot and no reprocess. None if either velocity is missing."""
+        fv = self.flowVelocity
+        if fv is None or self.rollerbandSpeed is None:
+            return None
+        return self.rollerbandSpeed - fv
 
     """
     # only trust this formula for profiles with monotonically rising x values (not the ones where "points are below each other")

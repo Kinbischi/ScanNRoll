@@ -9,6 +9,32 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Added
+- **`conveyorExtrusionVelocityDifference` derived PLC channel (m/s).** `rollerbandSpeed - flowVelocity` —
+  positive = the belt outruns extrusion (stretching), negative = material leaves the nozzle faster than the
+  belt carries it away (over-supply). A `profileData` `@property` like `flowVelocity` (added to
+  `DERIVED_PLC_COLUMNS`), so no cache slot / no reprocess; appears in the heat map + 2D comparison + 2D
+  feature-vs-PLC-continuous plots via `ALL_PLC_COLUMNS`, and is added to the curated lists of the two other
+  plots — the stepwise `PLC_FEATURES` y-list and `featureProportion`'s `PROPORTION_SUBJECTS` (which also
+  gains `flowVelocity`). Shares the `m/s` unit family with `rollerbandSpeed`/`flowVelocity` in the
+  keep-units overlay.
+- **"Keep units" overlay for the 2D multi-feature plots.** When two or more features are overlaid,
+  `featureComparison` and `featurePlcTrends` no longer *always* normalise to 0-1 — a new **"overlay y-axis"
+  radio** (`keep unit` default / `scale`) keeps them on a shared **real-unit** axis whenever the shown
+  features share a unit (mm with mm, mm² with mm², or a convertible family), falling back to the normalised
+  0-1 overlay only for mixed/blank units or when `scale` is chosen. Backed by one shared
+  `featureComparison.shared_unit(features)` helper + a small `_UNIT_FAMILY` table that also **converts across
+  a family** (e.g. `mL/min → L/min`, so the pump flows share one axis). To enable that, the PLC channels with
+  known units are now labelled in `FEATURE_DISPLAY` (`rollerbandSpeed` m/s, `mortarPumpFlow` L/min, the two
+  viscotec pumps mL/min) — nicer axis labels, no numeric change (factor stays 1.0).
+- **`flowVelocity` derived PLC channel — nozzle extrusion velocity (m/s).** Total volumetric pump flow /
+  nozzle cross-section: `mortarPumpFlow` (L/min) + `viscoPump1_VMAflow` + `viscoPump2_AcceleratorFlow` (both
+  mL/min), each converted to m³/s (`FLOW_TO_M3_PER_S`), divided by the round-nozzle area (`NOZZLE_AREA_M2`,
+  2 cm diameter). Reported in **m/s** so it is directly comparable to `rollerbandSpeed` (mortar at 1.03 L/min
+  ≈ 0.055 m/s). Implemented as a `profileData` `@property` like `pipePressureDifference` (added to
+  `DERIVED_PLC_COLUMNS`), so it needs **no cache slot and no reprocess** and appears in every plot/selector
+  via `ALL_PLC_COLUMNS` (with an `m/s` unit label). Per-pump unit factors are named constants — set the
+  viscotec factors if a future dataset's pumps report differently. (In Exp1 the viscotec pumps read 0, so
+  `flowVelocity` tracks only the mortar pump there.)
 - **Per-segment proportionality plot (`featureProportion.plot_feature_proportion`) + a `dataAnalysis` cell.**
   A new matplotlib module: one point per filament **segment** (run-collapsed like the stepwise run features),
   scattering two composed expressions to test whether one is proportional to another. Each axis is a **product

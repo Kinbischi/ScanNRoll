@@ -16,9 +16,11 @@ category-grouped (Geometry / Segment / PLC). Complements `featureComparison` (fe
 Single vs multiple features (auto-switch):
 - **one** feature shown -> the rich single-feature view in real units: a box or violin per level
   (stepwise), or a hexbin density + central-per-bin trend + spread band (continuous).
-- **two or more** features shown -> each collapses to one **normalised (0-1)** central+/-band trend line
-  on a shared axis, since several boxes/densities can't overlay legibly. Each feature's Spearman
-  correlation with the channel is shown in the legend.
+- **two or more** features shown -> each collapses to one central+/-band trend line on a shared axis, since
+  several boxes/densities can't overlay legibly. The **"overlay y-axis" toggle** picks the axis: "keep unit"
+  (default) draws them in their real unit when they share one (e.g. mm with mm, or a convertible family like
+  the pump flows — see `featureComparison.shared_unit`), else each is **normalised (0-1)** ("scale", or
+  "keep unit" with mixed units). Each feature's Spearman correlation with the channel is shown in the legend.
 
 A **median/mean toggle** switches the central statistic everywhere (median with a 25-75 IQR band, or
 mean with a +/-std band); in the single stepwise view it just moves the central line on the box/violin.
@@ -30,7 +32,7 @@ import numpy as np
 from matplotlib.widgets import CheckButtons, RadioButtons
 from scipy.stats import spearmanr
 
-from featureComparison import _feature_values, _normalise, _scale_range  # shared per-profile helpers
+from featureComparison import _feature_values, _normalise, _scale_range, shared_unit  # shared per-profile helpers
 from profile3Dplotting import FEATURE_DISPLAY, group_by_category  # unit factor/label + shared grouping
 from profileProcessingAlgorithms import _contiguous_runs, _segment_mask  # runs + cleaned segment membership
 from profilePointsClass import profileData
@@ -118,6 +120,7 @@ class FeaturePlcPlot:
         self._kind = kind
         self._stat = "median"
         self._shape = "box"
+        self._ymode = "keep"    # multi-feature overlay y-axis: "keep" real unit when shared, else "scale" (0-1)
         self._suppress = False  # re-entrancy guard for the continuous x-panel's single-select behaviour
 
         if kind == "continuous":
@@ -288,6 +291,17 @@ class FeaturePlcPlot:
         self._stat_radio = RadioButtons(self._stat_ax, list(_STATS), active=_STATS.index(self._stat))
         self._stat_radio.on_clicked(self._on_stat)
 
+        # multi-feature overlay y-axis mode: "keep unit" (default; real unit when the shown features share
+        # one) vs "scale" (normalised 0-1). Only affects the 2+-feature overlay; a lone feature is always
+        # real. Bottom-right, below the stat radio (a strip free in both the stepwise and continuous layouts).
+        self._ymode_ax = self.fig.add_axes((0.855, 0.005, 0.14, 0.062), frame_on=True)
+        self._ymode_ax.set_title("overlay y-axis", fontsize=8)
+        self._ymode_radio = RadioButtons(self._ymode_ax, ["keep unit", "scale"],
+                                         active=(0 if self._ymode == "keep" else 1))
+        for t in self._ymode_radio.labels:
+            t.set_fontsize(9)
+        self._ymode_radio.on_clicked(self._on_ymode)
+
         self._shape_radio = None
         if self._kind == "continuous":
             # any subject on either axis -> grouped panels, y (multi) left, x (single) right
@@ -381,6 +395,11 @@ class FeaturePlcPlot:
         self._shape = label
         self._render()
 
+    def _on_ymode(self, label: str) -> None:
+        """Overlay y-axis toggle: 'keep unit' draws same-unit features in their real unit, 'scale' normalises."""
+        self._ymode = "keep" if label == "keep unit" else "scale"
+        self._render()
+
     # --- rendering ------------------------------------------------------------------------------
     def _render(self) -> None:
         """Clear and rebuild the main axes for the current channel and visible features.
@@ -429,6 +448,7 @@ class FeaturePlcPlot:
                     self._draw_box_or_violin([lv for lv, _ in groups], [d for _, d in groups])
                 self._set_single_ylabel(f, self._spearman(x, yv))
         else:
+            scale = shared_unit(visible) if self._ymode == "keep" else None
             for f in visible:
                 if f in RUN_FEATURES:
                     pos, cen, blo, bhi = self._run_level_central(f, channel)
@@ -436,14 +456,12 @@ class FeaturePlcPlot:
                     pos, cen, blo, bhi = self._regular_level_central(f, xr, levels)
                 if not pos:
                     continue
-                lo, hi = self._scale[f]
                 pos = np.array(pos)
-                line, = self.ax.plot(pos, _normalise(np.array(cen), lo, hi), marker="o", lw=1.5,
+                y, ylo, yhi = self._overlay_y(f, np.array(cen), np.array(blo), np.array(bhi), scale)
+                line, = self.ax.plot(pos, y, marker="o", lw=1.5,
                                      label=self._step_legend_label(f, channel))
-                self.ax.fill_between(pos, _normalise(np.array(blo), lo, hi),
-                                     _normalise(np.array(bhi), lo, hi),
-                                     color=line.get_color(), alpha=0.15)
-            self._set_overlay_ylabel()
+                self.ax.fill_between(pos, ylo, yhi, color=line.get_color(), alpha=0.15)
+            self._set_overlay_ylabel(scale)
         self._apply_fixed_xaxis(levels)
 
     def _draw_box_or_violin(self, positions: list[float], data: list[np.ndarray]) -> None:
@@ -534,15 +552,15 @@ class FeaturePlcPlot:
                 self.ax.legend(loc="best", fontsize=9)
             self._set_single_ylabel(f, self._spearman(x, yv))
         else:
+            scale = shared_unit(visible) if self._ymode == "keep" else None
             for f in visible:
                 yv = self._phys[f]
-                lo, hi = self._scale[f]
                 m = np.isfinite(x) & np.isfinite(yv)
                 centres, central, _, _ = self._binned_trend(x[m], yv[m])
                 if centres.size:
-                    self.ax.plot(centres, _normalise(central, lo, hi), marker=".", lw=1.5,
-                                 label=self._legend_label(f, x))
-            self._set_overlay_ylabel()
+                    y = central * scale[1][f] if scale is not None else _normalise(central, *self._scale[f])
+                    self.ax.plot(centres, y, marker=".", lw=1.5, label=self._legend_label(f, x))
+            self._set_overlay_ylabel(scale)
 
     def _set_single_ylabel(self, feature: str, r: float) -> None:
         """y-axis label in the feature's real unit, plus a Spearman-r annotation in the corner."""
@@ -552,11 +570,26 @@ class FeaturePlcPlot:
         self.ax.text(0.02, 0.98, text, transform=self.ax.transAxes, va="top", ha="left",
                      fontsize=11, bbox={"facecolor": "white", "alpha": 0.7, "edgecolor": "none"})
 
-    def _set_overlay_ylabel(self) -> None:
-        """Shared normalised y-axis for the multi-feature overlay."""
-        p_lo, p_hi = CLIP_PERCENTILE
-        self.ax.set_ylabel(f"normalised per feature (robust {p_lo:g}-{p_hi:g} pct -> 0-1)", fontsize=12)
-        self.ax.set_ylim(-0.03, 1.03)
+    def _overlay_y(self, feature: str, cen: np.ndarray, blo: np.ndarray, bhi: np.ndarray,
+                   scale: "tuple[str, dict[str, float]] | None") -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Map a feature's (central, band-low, band-high) to the overlay y-axis: real unit (× the shared-unit
+        factor) when `scale` is given, else the feature's own normalised 0-1 range."""
+        if scale is None:
+            lo, hi = self._scale[feature]
+            return _normalise(cen, lo, hi), _normalise(blo, lo, hi), _normalise(bhi, lo, hi)
+        fac = scale[1][feature]
+        return cen * fac, blo * fac, bhi * fac
+
+    def _set_overlay_ylabel(self, scale: "tuple[str, dict[str, float]] | None" = None) -> None:
+        """y-axis for the multi-feature overlay: a shared real unit ('keep' with a common unit) or the
+        normalised 0-1 axis (otherwise)."""
+        if scale is None:
+            p_lo, p_hi = CLIP_PERCENTILE
+            self.ax.set_ylabel(f"normalised per feature (robust {p_lo:g}-{p_hi:g} pct -> 0-1)", fontsize=12)
+            self.ax.set_ylim(-0.03, 1.03)
+        else:
+            self.ax.set_ylabel(f"value [{scale[0]}]", fontsize=12)
+            self.ax.relim(); self.ax.autoscale(axis="y")
         self.ax.legend(loc="best", fontsize=9)
 
 
