@@ -65,6 +65,9 @@ Python/
 ├── profile3Dplotting.py                  # ACTIVE  PyVista 3D plotting + print-path geometry
 ├── featureComparison.py                  # ACTIVE  matplotlib 2D feature-vs-time comparison plot
 ├── featurePlcTrends.py                   # ACTIVE  matplotlib 2D feature-vs-PLC correlation plot (two cells: stepwise box/violin, continuous density+trend)
+├── featureProportion.py                  # ACTIVE  matplotlib 2D per-segment proportionality scatter (product-of-powers axes, y=k·x + log-log exponent)
+├── featureRates.py                       # ACTIVE  matplotlib 2D per-rollerband-speed pooled-rate bars (RATE_METRICS registry: neckRate / breakRate / ruptureFraction)
+├── exportSegmentAreas.py                 # ACTIVE  export each KEPT segment's areaShoelace series (+capture time) to CSV, one file per belt speed
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
 ├── HDf5data/  ProfileData/  Pics/        # data & outputs (git-ignored)
 ├── old/  RandomOther/  testGIthubCircleSquare/  # scratch / experiments (incl. old entry points)

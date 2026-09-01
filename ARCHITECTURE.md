@@ -47,6 +47,7 @@ The system has two halves that meet at an HDF5 file:
 | `featureComparison.py` | `compare_features()` — matplotlib 2D comparison of per-profile features + PLC channels over time: a lone curve → its real units; several shown → an **"overlay y-axis" toggle** picks a shared real-unit axis when they share a unit (`shared_unit()`, incl. cross-family conversion like mL/min→L/min) else a robust normalised 0–1 overlay (percentile-clipped). Category-grouped, colour-matched `CheckButtons` panel to toggle/smooth curves. Owns the shared `_feature_values`/`_scale_range`/`_normalise`/`shared_unit` helpers. Imports `profilePointsClass` + `FEATURE_DISPLAY` + `group_by_category`. | Active |
 | `featurePlcTrends.py` | `plot_feature_plc_trends()` — matplotlib 2D feature-vs-PLC correlation plot, one `kind` per call: `"stepwise"` (discrete channel on x → box/violin per level) or `"continuous"` (hexbin density + trend, with **any subject on either axis** — a shared feature+channel pool feeds a single-select x-picker and multi-select y-panel, both category-grouped, so feature-vs-channel / channel-vs-channel / feature-vs-feature all work); Spearman r; several y → central trend lines on a shared real-unit axis (`shared_unit`) or normalised 0–1 per the **"overlay y-axis" toggle**. Live median/mean statistic radio, and (stepwise) a box/violin shape radio + channel radio; constant channels force-shown; idle excluded; fixed x-axis (stepwise). Segment/defect features are aggregated **per run** in the stepwise view (one point per segment/defect) with `n=` counts, a >3-runs box rule, and >0.5 m / cross-level exclusions. Reuses `featureComparison`'s value/scale helpers, `FEATURE_DISPLAY`, `group_by_category`, and `profileProcessingAlgorithms._contiguous_runs`. | Active |
 | `featureProportion.py` | `plot_feature_proportion()` — matplotlib **per-segment** proportionality scatter (one point per filament segment, run-collapsed like the stepwise run features). Each axis is a **product of up to two `feature ^ power` terms**, built live from four radio columns (x·term1/2, y·term1/2 + a power radio each), so you can test relations like `rollerbandSpeed · segmentCriticalWidth ∝ segmentCriticalArea²` (the default). Two readouts: a through-origin fit `y = k·x` (k, R², Pearson r) and the log-log fitted exponent m (the measured power); a linear/log-log axes toggle. Per-segment scalars = nan-median over the segment's non-idle profiles (a broadcast feature = its constant); colour = per-segment `rollerbandSpeed`. Reuses `featureComparison._feature_values`, `FEATURE_DISPLAY`, and `profileProcessingAlgorithms._contiguous_runs`/`_segment_mask`. | Active |
+| `featureRates.py` | `plot_feature_rates()` — matplotlib 2D bar plot of **pooled per-rollerband-speed rates**: one bar per speed level = a ratio of sums over ALL profiles/runs at that speed (no run-length / straddler filter), so sparse events + continuous filaments count (unlike the stepwise per-segment distribution). Each metric is a small `(_RateContext) → {speed: (value, n)}` function in the **`RATE_METRICS`** registry (add one to extend); ships `neckRate` (necks/m, pooled from the `segmentNeck` marker), `breakRate` (defect gaps/m), `ruptureFraction`. A left radio switches the metric. Imports only `profilePointsClass` + `profileProcessingAlgorithms` run helpers. | Active |
 | `profileRegistration.py` | Align overlapping profiles in x (ICP / `minimize`), detect left/right/centre profiles, join them into a combined profile. | Legacy (dormant) |
 | `datasetConfig.py` | The active experiment's file paths (`RAW_FILE`, `PLC_FILE`, derived `PROCESSED_FILE`) in one place, imported by both entry points so they can't drift. Switch datasets by moving the "ACTIVE" pair; others kept commented. | Active |
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → join the PLC log by timestamp (trims to the overlap) → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
@@ -70,15 +71,17 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
    │    │                             ▲
    │    │                             ├── featurePlcTrends   matplotlib 2D feature-vs-PLC plot
    │    │                             │   (imports featureComparison helpers + FEATURE_DISPLAY + group_by_category)
-   │    │                             └── featureProportion  matplotlib 2D per-segment proportionality scatter
-   │    │                                 (imports featureComparison._feature_values + FEATURE_DISPLAY + run helpers)
+   │    │                             ├── featureProportion  matplotlib 2D per-segment proportionality scatter
+   │    │                             │   (imports featureComparison._feature_values + FEATURE_DISPLAY + run helpers)
+   │    │                             └── featureRates       matplotlib 2D per-speed pooled-rate bars (RATE_METRICS registry)
+   │    │                                 (imports run helpers only; pools the segmentNeck marker + speed + distances)
    │    └──────────── profileProcessingAlgorithms  processing fns + FLATNESS_RMS_THRESHOLD
    │                        ▲
    └── profileLoading ──────┘               HDF5 I/O (also imports FLATNESS_RMS_THRESHOLD)
 
  Entry points compose the above (both also import datasetConfig for the file paths):
    profileProcessing → profileLoading + profileProcessingAlgorithms + plcData                        (process)
-   dataAnalysis      → profileLoading + profile3Dplotting + plcData + featureComparison + featurePlcTrends + featureProportion   (plot)
+   dataAnalysis      → profileLoading + profile3Dplotting + plcData + featureComparison + featurePlcTrends + featureProportion + featureRates   (plot)
 
  profileRegistration       LEGACY / dormant — imports profilePointsClass (wildcard), off active path
  rawProfileUdpCapturing    standalone — imports only stdlib + numpy + h5py
@@ -186,14 +189,31 @@ the print path — a **startup** ramp → overshoot bulge, a **body** plateau (s
 measured on area / width (widthOuter) / height (heightP95): `segmentBody{Area,Width,Height}Thinning` (%/mm) +
 `segmentBody{Area,Width,Height}Steadiness` (-1..1)), `segmentCriticalArea` + `segmentRuptureLength` (rupture,
 at the derivative-cliff **rupture start**; NaN unless the segment ended thin per the `segmentRuptures` 0/1
-gate), and `segmentHeadOvershoot` (startup). Only **discrete** segments are analysed — length in
+gate), `segmentHeadOvershoot` (startup), and the per-profile `segmentNeck` marker (**necking**, below). Only **discrete**
+segments are analysed — length in
 [`SEGMENT_SHAPE_MIN_LENGTH_MM` (50 mm), `MAX_SEGMENT_LENGTH_MM` (600 mm)]; shorter ones give a noisy taper,
 longer ones are continuous filaments (above). The **body** is the plateau where the smoothed area stays
 within a ±band of `bodyLevel` — from where the ramp settles in to where it leaves the band, held a few mm
 (`SEGMENT_BODY_RUPTURE_MARGIN_MM`) back from the cliff / segment end so the pre-rupture roll-off stays out of
-the fit — and the taper is fit there, so the per-profile `segmentSection` flag (1 body / 2 rupture /
+the fit, **and stopping at the first neck** if one occurs inside the plateau — and the taper is fit there, so
+the per-profile `segmentSection` flag (1 body / 2 rupture /
 3 overshoot-peak band; the start ramp + the body↔rupture shoulder are NaN) faithfully shows exactly what the
-features use. Weird segments are **sorted out** of the shape analysis (their thinning features stay NaN, so
+features use. A **neck** (`_detect_necks`) is a local dip that thins then **recovers** (unlike the terminal
+rupture), detected by **local de-trend**: the smoothed signal is compared to a rolling-median local baseline
+(median over `NECK_LOCAL_BASELINE_MM`, 80 mm, of arc-length — the slow bulge/taper trend), and a neck is a dip
+of the AREA *below* that local baseline whose dip+recovery each exceed `NECK_AREA_PROMINENCE_FRAC` (30 %) of the
+**local** area baseline, confirmed by a coincident WIDTH residual dip ≥ `NECK_WIDTH_CONFIRM_FRAC` (10 %) of the
+local width baseline. Measuring against the local trend keeps every neck span local (onset/recovery = where the
+residual returns to baseline) and stops a slow bulge/taper from itself reading as a neck. The first neck ends
+the body (so a neck+recovery can't masquerade as taper — a plateau then left too short falls into the tiny-body
+sort-out). Each neck is written to the per-profile 0/1 **`segmentNeck`** marker (1 over the neck span) — the
+heat-map "where are the necks" view — on discrete *and* continuous filaments; no per-segment count is stored,
+because the useful summary is a **pooled per-rollerband-speed rate** (necks / m of filament), computed from the
+marker in **`featureRates`** (below), which — being distance-normalised and unfiltered — is the only view that
+surfaces the low-speed necking (it lives in the long continuous filaments the per-segment stepwise plot drops).
+(Trade-off of the local definition: a broad, gentle neck the baseline can follow is absorbed — a deliberate
+choice for robustness on long prints.) Weird segments are **sorted out**
+of the shape analysis (their thinning features stay NaN, so
 they drop from the plots) with a visible reason in `segmentShapeStatus` (0 kept; 1 too short; 2 continuous
 filament; 3 degenerate; 4 tiny body — a too-short plateau that otherwise gives a wild taper; 5 high width
 change — a turbulent/spreading bead whose area taper misleads; 6 didn't rupture). `segmentRuptures` is kept
@@ -236,8 +256,10 @@ discrete colormap instead of the gradient bar, and in its place an **upper-right
 appears (`_add_category_selector`) — one colour-matched toggle per category; unchecking one **greys those
 points out** (a companion NaN-mask array),
 so you can isolate e.g. just the tiny-body segments, and the scale-mode group is ignored. `segmentSection`
-(phase) keeps the plain gradient rendering (viridis + colour bar). The Segment category's **debug** row holds
-`segFlags` / `sortout` (`segmentShapeStatus`) / `phase` (`segmentSection`); `segmentRuptures` is not a
+(phase) and `segmentNeck` (the 0/1 neck marker) keep the plain gradient rendering (viridis + colour bar), both
+coloured over **all** points so their bands show full-width. The Segment category's **debug** row holds
+`segFlags` / `sortout` (`segmentShapeStatus`) / `phase` (`segmentSection`) / `neck` (`segmentNeck`, the necking
+view — its per-speed rate is a separate 2D plot, `featureRates`); `segmentRuptures` is not a
 heat-map button (its per-segment gate is read off `segmentShapeStatus` code 6, "no rupture").
 
 For comparing features against each other (rather than one at a time in space),
@@ -357,10 +379,12 @@ reads instead of ~N tiny per-group reads (measured **~142 s → ~5 s** on the 90
   volume; unset for flat profiles), `segmentLength` (filament-run length; unset on flat) / `defectLength`
   (pure-floor-run length; unset on non-flat), the per-segment **shape** features
   (the body thinning family `segmentBody{Area,Width,Height}{Thinning,Steadiness}`, plus `segmentCriticalArea`,
-  `segmentRuptureLength`, `segmentHeadOvershoot`, `segmentRuptures`; broadcast per segment, NaN off a rupture /
+  `segmentCriticalWidth`, `segmentRuptureLength`, `segmentHeadOvershoot`, `segmentRuptures`; broadcast per
+  segment, NaN off a rupture /
   on a too-short segment or a continuous filament — `segmentCriticalArea` is the cross-section at the rupture start) plus
   `segmentSection` (per-profile phase flag
-  1/2/3 = body/rupture/overshoot-peak, NaN elsewhere; a heat-map debug view), `segmentShapeStatus` (per-segment
+  1/2/3 = body/rupture/overshoot-peak, NaN elsewhere; a heat-map debug view), `segmentNeck` (per-profile 0/1 neck
+  marker), `segmentShapeStatus` (per-segment
   shape-analysis sort-out reason 0-6: 0 kept / 1 too short / 2 continuous / 3 degenerate / 4 tiny body /
   5 high width change / 6 didn't rupture; a heat-map debug view), `isFlat` (raw "no filament points"), `isSegment`
   (cleaned "part of a real filament segment", from `clean_flat_runs`), `isContinuousFilament` (an `isSegment`

@@ -50,6 +50,13 @@ plot_feature_plc_trends(processed, kind="continuous", features=DEFAULT_FEATURES,
                         initial_feature="widthFlank", initial_channel="pressurePrintHead", profile_step=5)
 
 
+# %% 2D per-speed rates — ONE pooled bar per rollerband speed (necks/m, breaks/m, rupture fraction); radio to switch metric   (needs a GUI backend)
+# Distance-normalised & unfiltered, so sparse events + continuous filaments count (unlike the stepwise plot). neckRate needs a reprocess.
+from dataAnalysisSetup import load, plot_feature_rates
+raw, processed = load()
+plot_feature_rates(processed, initial="neckRate")
+
+
 # %% 2D per-segment proportionality — one point per segment; build x/y each as a product of feature^power terms, fit y=k·x + log-log exponent
 # Default tests: rollerbandSpeed · segmentCriticalWidth  vs  segmentCriticalArea²  (change the term radios for any other relation)
 from dataAnalysisSetup import load, plot_feature_proportion

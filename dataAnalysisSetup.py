@@ -14,6 +14,7 @@ from datasetConfig import PROCESSED_FILE
 from featureComparison import compare_features
 from featurePlcTrends import DEFAULT_FEATURES, plot_feature_plc_trends
 from featureProportion import PROPORTION_SUBJECTS, plot_feature_proportion
+from featureRates import RATE_METRICS, plot_feature_rates
 from plcData import ALL_PLC_COLUMNS
 from profileLoading import load_profiles, read_file_attrs
 from profileProcessingAlgorithms import unlevel_profiles
@@ -57,6 +58,7 @@ HEATMAP_FEATURES = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "ar
                     "segmentBodyAreaThinning", "segmentBodyWidthThinning", "segmentBodyHeightThinning",
                     "segmentBodyAreaSteadiness", "segmentBodyWidthSteadiness", "segmentBodyHeightSteadiness",
                     "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength",  # segmentRuptures -> read off segmentShapeStatus
+                    "segmentNeck",  # necking: per-profile marker (where); per-speed necks/m rate is in featureRates
                     "isNotFlat", "isSegment", "isContinuousFilament",
                     "segmentShapeStatus", "segmentSection")
 
@@ -81,6 +83,7 @@ def load(force: bool = False) -> "tuple[list, list]":
 # Public workbench surface: what the dataAnalysis cells import from here (data loader + the plot entry points,
 # re-exported modules/constants, and the tunable config). Declared so re-exports don't read as unused imports.
 __all__ = ["load", "profile3Dplotting", "compare_features", "plot_feature_plc_trends",
-           "plot_feature_proportion", "ALL_PLC_COLUMNS", "DEFAULT_FEATURES", "PROPORTION_SUBJECTS",
+           "plot_feature_proportion", "plot_feature_rates", "ALL_PLC_COLUMNS", "DEFAULT_FEATURES",
+           "PROPORTION_SUBJECTS", "RATE_METRICS",
            "PROFILE_STEP", "POINT_STEP", "VOXEL_SIZE",
            "SEGMENT_SHAPE_FEATURES", "PLC_FEATURES", "HEATMAP_FEATURES"]

@@ -62,6 +62,7 @@ class profileData:
     segmentRuptureLength: Optional[float] = None    # arc-length of the terminal rupture cliff (mm; short = abrupt)
     segmentHeadOvershoot: Optional[float] = None    # startup bulge height over the body level (%)
     segmentRuptures: Optional[float] = None         # 1.0 if the segment ended in a rupture, else 0.0
+    segmentNeck: Optional[float] = None             # per-profile neck marker: 1.0 over a neck span, 0.0 elsewhere in an analysed run, None off-segment; heat-map (the per-speed neck RATE is pooled from this in featureRates)
     segmentSection: Optional[float] = None          # per-profile phase flag (1 body, 2 rupture, 3 peak; else NaN); heat-map debug
     segmentShapeStatus: Optional[float] = None       # per-segment sort-out reason for the shape analysis: 0 kept, 1 too short, 2 continuous filament, 3 degenerate, 4 tiny body, 5 high width change, 6 didn't rupture; heat-map debug
     maxSmoothedHeight: Optional[float] = None

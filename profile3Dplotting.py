@@ -40,6 +40,7 @@ FEATURE_DISPLAY = {
     "segmentRuptureLength":     ("segmentRuptureLength", 1.0, "mm"),
     "segmentHeadOvershoot":     ("segmentHeadOvershoot", 1.0, "%"),
     "segmentRuptures":          ("segmentRuptures", 1.0, ""),
+    "segmentNeck":              ("segmentNeck", 1.0, ""),       # per-profile neck marker (0/1); debug view (per-speed necks/m rate lives in featureRates)
     "segmentSection":           ("segmentSection", 1.0, ""),   # per-profile phase code (1/2/3); debug view
     "segmentShapeStatus":       ("segmentShapeStatus", 1.0, ""),  # per-segment sort-out reason (0-6); debug view
     # Per-profile 0/1 segmentation flags (share one 0-1 colour group; 1 = filament/segment = high colour):
@@ -98,10 +99,10 @@ _RANK_SUFFIX = "__rank"          # per-feature companion array holding the [0, 1
 # Heat-map point set per feature: the unified heat-map prebuilds one cloud per distinct point set and
 # swaps the visible one when the active feature changes. These features live on floor/gap profiles (no
 # filament points) so they are coloured over ALL points; every other feature colours the filament points.
-# `segmentSection` (the startup/body/rupture phase code) is coloured over ALL points too, so each segment's
-# phase bands show full-width in the print context (the off-segment floor is NaN = the NaN colour).
+# `segmentSection` (the startup/body/rupture phase code) and `segmentNeck` (the neck marker) are coloured over
+# ALL points too, so each segment's phase / neck bands show full-width in the print context (off-segment = NaN).
 _ALL_POINT_FEATURES = frozenset({"isSegment", "isNotFlat", "isContinuousFilament", "defectLength",
-                                 "segmentSection", "segmentShapeStatus"})
+                                 "segmentSection", "segmentNeck", "segmentShapeStatus"})
 
 
 def _feature_pointset(feature: str) -> "str | None":
@@ -172,7 +173,7 @@ SELECTOR_CATEGORIES: tuple[tuple[str, tuple[str, ...]], ...] = (
                  "segmentBodyAreaSteadiness", "segmentBodyWidthSteadiness", "segmentBodyHeightSteadiness",  # + steadiness -> bodyThinning parent
                  "segmentCriticalArea", "segmentCriticalWidth", "segmentRuptureLength", "segmentRuptures",  # rupture phase
                  "isNotFlat", "isSegment", "isContinuousFilament",                    # seg flags -> segFlags parent
-                 "segmentShapeStatus", "segmentSection")),                            # debug: sortout / phase
+                 "segmentShapeStatus", "segmentSection", "segmentNeck")),             # debug: sortout / phase / neck marker
     ("PLC", ALL_PLC_COLUMNS),
 )
 
@@ -192,6 +193,7 @@ FEATURE_UI: dict[str, tuple[str, str]] = {
     "segFlags":                 ("debug", "segFlags"),    # parent token -> expands to notFlat/isSeg/contFil
     "segmentShapeStatus":       ("debug", "sortout"),     # per-segment sort-out reason (0-6)
     "segmentSection":           ("debug", "phase"),       # per-profile phase code (1/2/3)
+    "segmentNeck":              ("debug", "neck"),         # per-profile neck marker (0/1)
 }
 # PLC channels are packed a few per row with short labels so the (many) channels don't overflow the panel.
 _PLC_LABEL: dict[str, str] = {

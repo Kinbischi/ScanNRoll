@@ -9,6 +9,40 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Added
+- **Necking detection (local de-trend) + the body now stops at the first neck (`segmentShape.py`).** A **neck**
+  is a local cross-section dip that thins then **recovers** (unlike the terminal rupture, which stays low),
+  detected by **local de-trend**: the smoothed signal is compared to a rolling-median **local baseline** (median
+  over `NECK_LOCAL_BASELINE_MM` = 80 mm of arc-length — the slow bulge/taper trend), and a neck is a dip of the
+  AREA *below* that baseline whose dip+recovery each exceed `NECK_AREA_PROMINENCE_FRAC` (30 %) of the **local**
+  area baseline, **confirmed** by a coincident WIDTH residual dip ≥ `NECK_WIDTH_CONFIRM_FRAC` (10 %) of the local
+  width baseline. Measuring against the local trend (not one global
+  body level) keeps every neck span **local** — onset/recovery = where the residual returns to baseline, fixing
+  a prior artifact where a dip inside a bulge spanned the whole bulge (an 884 mm "neck" on the long filament) —
+  and stops a slow bulge/taper from reading as a neck. Trade-off (deliberate, for robustness on long prints): a
+  broad, gentle neck the baseline can follow is absorbed. The **first neck ends the body plateau**, so the
+  thinning taper is fit only over the clean pre-neck stretch instead of through the dip+recovery (which
+  otherwise could flip a thinning segment to *apparent thickening*); a plateau then left < `MIN_BODY_LENGTH_MM`
+  falls into the existing tiny-body sort-out. Each neck is written to the per-profile **`segmentNeck`** marker
+  (0/1, 1 over the neck span — the heat-map "where are the necks" view, over all points like `segmentSection`;
+  set on continuous filaments too). No per-segment neck count/density is stored: the useful summary is a
+  **pooled per-rollerband-speed rate** (see `featureRates` below). **Reprocess required**
+  (`python profileProcessing.py`) — one new persisted `profileData` field (`segmentNeck`); until then it loads
+  as None.
+- **`featureRates.py` (new) — per-rollerband-speed pooled-rate bar plot.** A new `dataAnalysis` cell (after the
+  feature-vs-PLC continuous cell) shows **one bar per speed** = a ratio of sums over ALL profiles/runs at that
+  speed, **no run-length / straddler filter** — so sparse events and continuous filaments count, unlike the
+  stepwise per-segment box/violin (which drops the >0.5 m runs *where the low-speed necks live*, so it showed
+  nothing at low speed). Distance-normalised (per metre), so a 4 m filament and a 0.2 m segment compare. Each
+  metric is a small `(_RateContext) → {speed: (value, n)}` function in the **`RATE_METRICS`** registry (add one
+  to extend — a reusable "channel" for future bar-wise features); ships **`neckRate`** (necks/m of filament,
+  pooled from the `segmentNeck` marker → reveals necking is a **low-speed** phenomenon: 7.3/m at 0.02 → ~0 at
+  0.08+), **`breakRate`** (defect gaps/m — the print fragments *more* at high speed), and **`ruptureFraction`**
+  (segments that ruptured / segments — ≈universal here). A left radio switches the metric. This **replaces the
+  per-segment `segmentNeckCount`/`segmentNeckDensity`** (both removed everywhere; the plots showed all-zero
+  boxes and filtered out the low-speed continuous filaments). `segmentNeck` stays the heat-map necking view.
+- **`exportSegmentAreas.py` (new).** Writes each KEPT segment's along-path `areaShoelace` series (mm²) to CSV,
+  one file per `rollerbandSpeed` level, into `SegmentAreaCsv/` (git-ignored). Each segment is a `[time, area]`
+  column pair — capture time (`arrivalTime`, s) on the left, area on the right — padded to the longest segment.
 - **`conveyorExtrusionVelocityDifference` derived PLC channel (m/s).** `rollerbandSpeed - flowVelocity` —
   positive = the belt outruns extrusion (stretching), negative = material leaves the nozzle faster than the
   belt carries it away (over-supply). A `profileData` `@property` like `flowVelocity` (added to

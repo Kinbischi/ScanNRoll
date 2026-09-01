@@ -21,7 +21,23 @@ matches exactly what the features use). Along one segment:
     mid-segment dome/spike) settles from the start, so its body isn't pushed late.
   - BODY = the plateau: body_start .. body_end, where body_end = the last in-band point held back at least
     `SEGMENT_BODY_RUPTURE_MARGIN_MM` (3 mm) before the cliff top (or the segment end if it never ruptures),
-    so the pre-rupture roll-off stays out of the taper fit. The taper is fit over this plateau.
+    so the pre-rupture roll-off stays out of the taper fit. The taper is fit over this plateau. If a NECK
+    (below) occurs inside the plateau, body_end is pulled back to the first neck's onset, so the taper is fit
+    only over the clean pre-neck stretch — a plateau left too short by this then falls into the tiny-body sort-out.
+
+NECKING (`_detect_necks`, LOCAL DE-TREND): a NECK is a dip that thins and then RECOVERS (climbs back), unlike
+  the terminal rupture (thins and stays low). It is detected against a LOCAL baseline — the signal median-
+  filtered over `NECK_LOCAL_BASELINE_MM` (80 mm) of arc-length, which follows slow bulges / tapers — so a neck
+  is a dip of the AREA below its local baseline (residual `RA = A - baseline` < 0) whose dip-from-shoulder and
+  recovery each exceed `NECK_AREA_PROMINENCE_FRAC` (30 %) of the LOCAL area baseline, CONFIRMED on the WIDTH
+  residual (>= `NECK_WIDTH_CONFIRM_FRAC` (10 %) of the local width baseline). Measuring
+  against the local trend keeps every neck span local (onset/recovery = where the residual returns to baseline)
+  and stops a slow bulge or taper from itself reading as a neck. Necks count only after the body settles; the
+  first neck ends the body (above). Each neck is written to the per-profile `segmentNeck` marker (1 over the
+  neck span) — also on continuous filaments (otherwise not shape-analysed) — and the per-rollerband-speed neck
+  RATE (necks / m) is pooled from that marker later, in `featureRates`. NOTE this is a LOCAL-relative
+  definition: a broad, gentle neck the baseline can follow is ABSORBED (not counted) — chosen deliberately for
+  robustness on long prints, at the cost of some broad low-speed necks.
   - rupture_start = the top of the terminal cliff: the steepest descent in the segment's back half, walked
     left to where the slope is still >= `RUPTURE_START_GFRAC` of that peak steepness (`_rupture_start`).
   - A segment "ruptures" only if its end level (median over the last `SEGMENT_END_SPAN_MM`, 1.5 mm) is
@@ -44,6 +60,9 @@ THE FEATURES (broadcast onto every profile of the segment, like segmentVolume; p
                                           (the width analogue of segmentCriticalArea).
   - `segmentRuptureLength` (mm)           arc-length rupture_start .. end = the cliff length (short = snap).
   - `segmentRuptures` (0/1)               did it rupture (gate above); its per-speed mean = the rupture rate.
+  - `segmentNeck` (0/1 per profile)       per-profile marker: 1 over each neck span, 0 elsewhere in an analysed
+                                          run — the heat-map "where are the necks" view; the per-speed neck RATE
+                                          (necks/m) is pooled from it in `featureRates` (see NECKING).
   - `segmentSection` (1/2/3, else NaN)    per-profile DEBUG flag (varies within the segment): 1 body,
                                           2 rupture, 3 a small band around the overshoot peak; the start
                                           ramp + shoulder are NaN. Shows exactly the regions used above.
@@ -80,6 +99,7 @@ by the `profileProcessing.py` entry point after the PLC join. Units: `areaShoela
 units (mm, mm^2, %/mm, %, dimensionless).
 """
 import numpy as np
+from scipy.signal import find_peaks
 from scipy.stats import spearmanr, theilslopes
 
 from profilePointsClass import profileData
@@ -110,6 +130,21 @@ SEGMENT_SHAPE_MIN_LENGTH_MM = 50.0  # segments shorter than this are not shape-a
 # WIDTH_CHANGE_MAX_FRAC of the body width across the body is turbulent/spreading (its area taper misleads).
 MIN_BODY_LENGTH_MM = 15.0        # sort out if the body plateau is shorter than this (catches degenerate tapers)
 WIDTH_CHANGE_MAX_FRAC = 0.40     # sort out if (max-min widthOuter over the body) / body width exceeds this
+# Necking: a NECK is a local dip in the along-segment cross-section that thins then RECOVERS (climbs back),
+# unlike the terminal rupture (thins and stays low). Detected by LOCAL DE-TREND: the smoothed signal is
+# compared to a rolling-median local baseline (median over NECK_LOCAL_BASELINE_MM of arc-length) that follows
+# slow bulges / tapers, and a neck is a dip of the AREA below that local baseline (residual R = A - baseline)
+# that recovers, CONFIRMED on the WIDTH residual (width dips ~half as much at a real neck). Measuring against
+# the LOCAL trend (not one global body level) keeps every neck span local and stops a slow bulge/taper from
+# reading as a neck. The first neck ends the body plateau, so the taper is fit only over the clean pre-neck
+# stretch; each neck is written to the per-profile `segmentNeck` marker (the per-speed necks/m rate is pooled
+# from it in `featureRates`). NOTE the trade-off (deliberate, for robustness on long prints): a broad, gentle
+# neck the baseline can follow is ABSORBED (not counted).
+NECK_LOCAL_BASELINE_MM = 80.0     # arc-length window of the rolling-median local baseline necks are measured against
+NECK_AREA_PROMINENCE_FRAC = 0.30  # a neck's AREA residual must dip from its shoulder AND recover, each >= this * local area baseline (raise for stricter/fewer necks)
+NECK_WIDTH_CONFIRM_FRAC = 0.10    # ... and its widthOuter residual must also dip+recover >= this * local width baseline (width moves less, but a real neck still narrows clearly)
+NECK_WIDTH_TOL = 6                # profiles: the confirming width minimum is sought within +-this of the area-neck minimum
+NECK_MARK_HALFWIDTH = 5           # profiles each side of a neck minimum flagged in segmentNeck (survives heat-map decimation)
 
 # segmentSection phase codes (NaN elsewhere = start ramp + shoulder, unused by any feature):
 _SECTION_BODY, _SECTION_RUPTURE, _SECTION_PEAK = 1.0, 2.0, 3.0
@@ -194,6 +229,111 @@ def _rupture_start(s: np.ndarray, A: np.ndarray) -> "int | None":
         k -= 1
     return k
 
+def _fill_nans(y: np.ndarray) -> np.ndarray:
+    """Linearly interpolate interior NaNs so peak-finding sees a continuous signal (unchanged if <2 finite)."""
+    finite = np.isfinite(y)
+    if finite.all() or finite.sum() < 2:
+        return y
+    out = y.copy()
+    out[~finite] = np.interp(np.flatnonzero(~finite), np.flatnonzero(finite), y[finite])
+    return out
+
+def _dip_recovery(y: np.ndarray, a: int, m: int) -> "tuple[float, float]":
+    """Depth of the dip at index m below its preceding shoulder (max over [a, m)) and its recovery afterwards
+    (max over (m, end]). (0, 0) at an edge. A terminal descent (dips and stays low to the end) has ~0 recovery,
+    so requiring both distinguishes a neck (thins then recovers) from the final rupture."""
+    if m <= a or m >= y.size - 1:
+        return 0.0, 0.0
+    return float(np.max(y[a:m])) - float(y[m]), float(np.max(y[m + 1:])) - float(y[m])
+
+def _detect_necks(s: np.ndarray, A: np.ndarray, W: np.ndarray, body_start: "int | None"
+                  ) -> "list[tuple[int, int, int]]":
+    """Interior necks of a run by LOCAL DE-TREND: a dip of the AREA below its local baseline that recovers,
+    confirmed by a coincident WIDTH dip below its local baseline.
+
+    The local baseline of each signal = the (already-smoothed) signal median-filtered over
+    `NECK_LOCAL_BASELINE_MM` of arc-length `s`, i.e. the slowly-varying trend (it follows a bulge / taper
+    without following a neck). On the AREA residual `RA = A - baseline`, a neck is an interior minimum with
+    `RA < 0` (below the local trend) whose dip-from-shoulder and recovery each exceed
+    `NECK_AREA_PROMINENCE_FRAC` * (local area baseline) — a % of the LOCAL cross-section — and whose nearest
+    WIDTH residual minimum (within `NECK_WIDTH_TOL`) likewise dips and recovers by at least
+    `NECK_WIDTH_CONFIRM_FRAC` * (local width baseline). Only minima at/after `body_start` count. onset/recovery
+    = where the residual returns to its baseline (`RA >= 0`) around the dip, so a dip inside a broad bulge does
+    NOT span the bulge. Returns [(onset, min, recovery), ...] in local indices. (Trade-off: a broad neck the
+    baseline can follow is absorbed — see the NECKING note in the module constants.)"""
+    if body_start is None or s.size < 3:
+        return []
+    Af, Wf = _fill_nans(A), _fill_nans(W)
+    dt = float(np.median(np.diff(s)))
+    if not np.isfinite(dt) or dt <= 0:
+        return []
+    win = max(5, round(NECK_LOCAL_BASELINE_MM / dt) | 1)  # odd window (profiles) for the local baseline
+    BA, BW = _median_smooth(Af, win), _median_smooth(Wf, win)  # local baselines (slow trend)
+    RA, RW = Af - BA, Wf - BW                                   # residuals (deviation from the local trend)
+    ba_scale = float(np.nanmedian(BA))
+    if not np.isfinite(ba_scale) or ba_scale <= 0:
+        return []
+    a = int(body_start)
+    above = RA >= 0
+    peaks, _ = find_peaks(-RA, prominence=0.5 * NECK_AREA_PROMINENCE_FRAC * ba_scale)  # candidate residual minima
+    necks: list[tuple[int, int, int]] = []
+    for m in peaks:
+        m = int(m)
+        if m <= a or m >= RA.size - 1 or RA[m] >= 0:                 # must dip BELOW the local baseline
+            continue
+        ad, ar = _dip_recovery(RA, a, m)
+        if min(ad, ar) < NECK_AREA_PROMINENCE_FRAC * BA[m]:         # AREA must dip AND recover (local scale)
+            continue
+        lo = max(a + 1, m - NECK_WIDTH_TOL)
+        hi = min(Wf.size - 1, m + NECK_WIDTH_TOL + 1)
+        if hi <= lo:
+            continue
+        mw = int(lo + np.argmin(RW[lo:hi]))
+        wd, wr = _dip_recovery(RW, a, mw)
+        if min(wd, wr) < NECK_WIDTH_CONFIRM_FRAC * BW[mw]:          # WIDTH must confirm (lighter threshold)
+            continue
+        left = np.flatnonzero(above[a:m])
+        right = np.flatnonzero(above[m + 1:])
+        onset = int(left[-1] + a) if left.size else a
+        recovery = int(right[0] + m + 1) if right.size else RA.size - 1
+        necks.append((onset, m, recovery))
+    return necks
+
+def _neck_marker(necks: "list[tuple[int, int, int]]", n: int) -> np.ndarray:
+    """Per-profile 0/1 marker of length n: 1.0 over each neck span (onset..recovery, widened to
+    +-`NECK_MARK_HALFWIDTH` around the minimum so a thin neck survives heat-map decimation), else 0.0."""
+    marker = np.zeros(n)
+    for onset, m, recovery in necks:
+        lo = max(0, min(onset, m - NECK_MARK_HALFWIDTH))
+        hi = min(n, max(recovery, m + NECK_MARK_HALFWIDTH) + 1)
+        marker[lo:hi] = 1.0
+    return marker
+
+def _run_neck_info(s: np.ndarray, A: np.ndarray, W: np.ndarray
+                   ) -> "tuple[np.ndarray | None, int | None]":
+    """Per-profile neck marker + first-neck onset for one run's smoothed area/width signals.
+
+    Establishes the run's settle point (`body_start`, via the 20-80% area body level) and then calls
+    `_detect_necks` (local de-trend). Used for BOTH discrete segments (whose first neck ends the body plateau)
+    and continuous filaments (necks marked + shown, though they are not otherwise shape-analysed), so the
+    definition is identical. Returns (marker, first_onset); (None, None) if no body / settle point exists.
+    The per-speed neck *rate* is pooled from the marker later (`featureRates`), so no count is stored here."""
+    L = float(s[-1])
+    finite = np.isfinite(A)
+    if L <= 0 or finite.sum() < 5:
+        return None, None
+    blo, bhi = SEGMENT_BODYLEVEL_WINDOW
+    bmask = (s >= blo * L) & (s <= bhi * L) & finite
+    area_body = float(np.median(A[bmask])) if bmask.any() else np.nan
+    if not (np.isfinite(area_body) and area_body > 0):
+        return None, None
+    body_start = _settle_index(s, A, area_body)
+    if body_start is None:
+        return None, None
+    necks = _detect_necks(s, A, W, body_start)
+    onset = necks[0][0] if necks else None
+    return _neck_marker(necks, s.size), onset
+
 def _thinning_pair(sig: np.ndarray, s: np.ndarray, idx: np.ndarray, level: float) -> "tuple[float, float]":
     """(thinning rate %/mm, steadiness) of one signal over the body indices `idx`, normalised by `level`.
 
@@ -208,10 +348,13 @@ def _thinning_pair(sig: np.ndarray, s: np.ndarray, idx: np.ndarray, level: float
     r = spearmanr(s[j], sig[j])[0]
     return thin, (float(r) if np.isfinite(r) else np.nan)
 
-def _segment_shape_values(s: np.ndarray, A: np.ndarray, W: np.ndarray, H: np.ndarray
+def _segment_shape_values(s: np.ndarray, A: np.ndarray, W: np.ndarray, H: np.ndarray,
+                          neck_onset: "int | None" = None
                           ) -> "tuple[float, float | None, dict | None, np.ndarray | None]":
     """Compute the per-segment shape features (and sort-out status) from the smoothed area signal A(s),
-    outer-width signal W(s) and height signal H(s) (arc-length s in mm). Returns a tuple:
+    outer-width signal W(s) and height signal H(s) (arc-length s in mm). `neck_onset` (from `_run_neck_info`)
+    is the onset index of the segment's first neck, if any: the body plateau ends there so the taper is fit
+    only over the clean pre-neck stretch (an over-short result falls into the tiny-body sort-out). Returns:
 
     - `status`: a `segmentShapeStatus` code (`_STATUS_*`) — 0 kept, else the reason it was sorted out of
       the shape analysis (3 degenerate, 4 tiny body, 5 high width change, 6 didn't rupture).
@@ -258,6 +401,11 @@ def _segment_shape_values(s: np.ndarray, A: np.ndarray, W: np.ndarray, H: np.nda
         region = np.arange(body_start, upper + 1)
         inband = region[finite[region] & (np.abs(A[region] - body) <= band) & (s[region] <= end_bound)]
         body_end = int(inband[-1]) if inband.size else body_start
+        # end the body plateau at the FIRST neck (a thin-and-recover event), so the taper isn't fit through the
+        # dip + recovery. neck_onset >= body_start (necks are detected after settle), so this only shortens the
+        # plateau; an over-short result then falls into the tiny-body sort-out below.
+        if body_end is not None and neck_onset is not None and neck_onset < body_end:
+            body_end = neck_onset
     if body_start is None or body_end is None or body_end <= body_start:
         return _STATUS_DEGENERATE, ruptures_flag, None, None
     idx = np.arange(body_start, body_end + 1)
@@ -335,9 +483,15 @@ def measure_segment_shape(profiles: list[profileData]) -> None:
     - `segmentRuptures` (0/1)            whether the segment ended in a rupture (set on every valid-body run)
     - `segmentSection` (1/2/3, else NaN) per-profile phase flag for the heat map: 1 body, 2 rupture,
                                          3 the overshoot-peak band; the start ramp + shoulder are NaN
+    - `segmentNeck` (0/1, else None)     per-profile neck marker for the heat map: 1 over each neck span, 0
+                                         elsewhere in an analysed run (discrete or continuous); None off-segment.
+                                         The per-rollerband-speed neck RATE (necks/m) is pooled from it in `featureRates`
     - `segmentShapeStatus` (0-6)         per-segment sort-out reason (heat-map debug): 0 kept, 1 too short,
                                          2 continuous filament, 3 degenerate, 4 tiny body, 5 high width
                                          change, 6 didn't rupture
+
+    The first neck ends the body plateau (so the thinning taper is fit over the clean pre-neck stretch, not
+    through a dip + recovery); a segment whose plateau is then too short falls into the tiny-body sort-out.
 
     Needs `isSegment` (clean_flat_runs) + areaShoelace + widthOuter (measure_filament_area / width) + the
     PLC-joined spacing (profile_advance_distances). Run after clean_flat_runs / measure_run_lengths. See the
@@ -347,6 +501,7 @@ def measure_segment_shape(profiles: list[profileData]) -> None:
         for f in _SEGMENT_SHAPE_FIELDS:
             setattr(p, f, None)
         p.segmentSection = None       # per-profile phase code (varies within a segment)
+        p.segmentNeck = None          # per-profile neck marker (varies within a segment)
         p.segmentShapeStatus = None   # per-segment sort-out reason (None off-segment)
 
     dist = profile_advance_distances(profiles)
@@ -357,20 +512,27 @@ def measure_segment_shape(profiles: list[profileData]) -> None:
     for run in _contiguous_runs(_segment_mask(profiles)):
         s_mm = np.concatenate([[0.0], np.cumsum(dist[run][1:])]) * PROFILE_UNITS_TO_MM  # arc-length (mm)
         L_mm = float(s_mm[-1])
-        # Length gate first (a run outside the discrete-segment band is sorted out before any fitting).
+        neck_marker = None
+        # Length gate first (a run outside the discrete-segment band is sorted out before any taper fitting).
         if L_mm < SEGMENT_SHAPE_MIN_LENGTH_MM:
             status, ruptures_flag, values, sections = _STATUS_TOO_SHORT, None, None, None
-        elif L_mm > MAX_SEGMENT_LENGTH_MM:
-            status, ruptures_flag, values, sections = _STATUS_CONTINUOUS, None, None, None
         else:
             A = _median_smooth(area[run], SEGMENT_SHAPE_SMOOTH)
             W = _median_smooth(width[run], SEGMENT_SHAPE_SMOOTH)
-            H = _median_smooth(height[run], SEGMENT_SHAPE_SMOOTH)
-            status, ruptures_flag, values, sections = _segment_shape_values(s_mm, A, W, H)
+            # necks are marked on discrete AND continuous runs (same definition); the first neck's onset ends
+            # the discrete body plateau (passed into _segment_shape_values below).
+            neck_marker, neck_onset = _run_neck_info(s_mm, A, W)
+            if L_mm > MAX_SEGMENT_LENGTH_MM:
+                status, ruptures_flag, values, sections = _STATUS_CONTINUOUS, None, None, None
+            else:
+                H = _median_smooth(height[run], SEGMENT_SHAPE_SMOOTH)
+                status, ruptures_flag, values, sections = _segment_shape_values(s_mm, A, W, H, neck_onset)
         for local_i, i in enumerate(run):
             profiles[i].segmentShapeStatus = float(status)         # sort-out reason (broadcast per segment)
             if ruptures_flag is not None:
                 profiles[i].segmentRuptures = float(ruptures_flag)  # rupture gate: kept even when sorted out
+            if neck_marker is not None:
+                profiles[i].segmentNeck = float(neck_marker[local_i])  # per-profile neck marker (0/1)
             if values is not None and sections is not None:         # KEPT: broadcast the shape features + phase
                 profiles[i].segmentSection = float(sections[local_i])
                 for f, v in values.items():
