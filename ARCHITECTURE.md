@@ -53,6 +53,7 @@ The system has two halves that meet at an HDF5 file:
 | `profileProcessing.py` | **Entry point (process).** Hosts the `process_profiles()` pipeline (composes the algorithm functions in order) and the run script: load raw HDF5 → process → join the PLC log by timestamp (trims to the overlap) → write the processed-HDF5 cache. Run once per dataset / when processing params change. | Active |
 | `dataAnalysis.py` | **Entry point (plot workbench).** Cell-based (`# %%`) file: each cell self-bootstraps from `dataAnalysisSetup` (`from dataAnalysisSetup import …` + `raw, processed = load()`) so any cell can be run first, then plots flexibly in 3D (PyVista, native window) — a togglable preprocessing overlay + the feature heat-map — plus the 2D feature-vs-time comparison and feature-vs-PLC correlation views. No processing on this path (uses the cache, not `process_profiles`). | Active |
 | `dataAnalysisSetup.py` | **Workbench setup for `dataAnalysis`.** Imports, display config (PyVista + matplotlib Qt backend), the tunable constants (`PROFILE_STEP` / feature lists), and a cached `load()` (processed cache + raw reconstruction, loaded once per kernel; `load(force=True)` re-reads). Importable so every cell can be run first. | Active |
+| `printPathFromObj.py` | **Side project (experimental, opt-in) — NOT part of the pipeline; trying out an extra feature.** Reconstructs the print path of an arbitrary printed object from a Rhino swept-tube **OBJ mesh** (each `usemtl` group → ordered ring-centroids) and caches it to NPZ; visualises the path coloured by build height (layer-reveal slider) and an optional **cladding** that hangs real measured `profileData` cross-sections along it as ribs + a swept surface (style / colour / defect toggle buttons, reveal + bead-opacity sliders, red defect markers & pillars). Standalone `# %%` workbench; top-level imports only `numpy` + `pyvista` (lazily reads the processed cache via `profileLoading`/`datasetConfig` only to fetch sample profiles). OBJ + NPZ caches live in git-ignored `ColumnData/`. | Side project (experimental) |
 | `LidarProfileAnalysis_oldRegistration.py` | Previous entry point built around the registration path. | Legacy |
 
 ---
@@ -85,6 +86,8 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
 
  profileRegistration       LEGACY / dormant — imports profilePointsClass (wildcard), off active path
  rawProfileUdpCapturing    standalone — imports only stdlib + numpy + h5py
+ printPathFromObj          SIDE PROJECT / experimental (trying an extra feature) — standalone, off active
+                           path; imports numpy + pyvista (+ lazily profileLoading/datasetConfig for samples)
 ```
 
 Edges: `profileProcessingAlgorithms`, `profileLoading`, `profile3Dplotting`, and `plcData` each

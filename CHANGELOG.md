@@ -9,6 +9,16 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Added
+- **[Side project / experimental] Print-path reconstruction + profile cladding from an OBJ mesh
+  (`printPathFromObj.py`, new).** An opt-in experiment **trying out an extra feature**, kept deliberately
+  **separate from the core pipeline** (top-level imports only `numpy` + `pyvista`; imported by nothing; does
+  not touch acquisition / processing / analysis). Reconstructs the print path of an arbitrary printed object
+  from a Rhino swept-tube **OBJ** (each `usemtl` group → ordered ring-centroids) and caches it to NPZ, then
+  visualises it — the path coloured by build height with a **layer-reveal slider**, and an optional
+  **cladding** that lays real measured profiles along the path as ribs + a swept bead **surface** (style /
+  colour / defect **toggle buttons**, a reveal + **bead-opacity slider**, and red defect **markers/pillars**
+  to make injected defects easy to spot). The whole-object view uses an **opaque surface + coarse sampling**
+  to stay responsive. OBJ meshes + derived NPZ caches live in the new git-ignored `ColumnData/`.
 - **Necking detection (local de-trend) + the body now stops at the first neck (`segmentShape.py`).** A **neck**
   is a local cross-section dip that thins then **recovers** (unlike the terminal rupture, which stays low),
   detected by **local de-trend**: the smoothed signal is compared to a rolling-median **local baseline** (median

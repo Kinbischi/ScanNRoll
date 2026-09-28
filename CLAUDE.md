@@ -68,6 +68,7 @@ Python/
 ├── featureProportion.py                  # ACTIVE  matplotlib 2D per-segment proportionality scatter (product-of-powers axes, y=k·x + log-log exponent)
 ├── featureRates.py                       # ACTIVE  matplotlib 2D per-rollerband-speed pooled-rate bars (RATE_METRICS registry: neckRate / breakRate / ruptureFraction)
 ├── exportSegmentAreas.py                 # ACTIVE  export each KEPT segment's areaShoelace series (+capture time) to CSV, one file per belt speed
+├── printPathFromObj.py                   # SIDE PROJECT (experimental, standalone)  reconstruct print path from a Rhino OBJ mesh + clad it with profiles (numpy+pyvista; off the pipeline)
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
 ├── HDf5data/  ProfileData/  Pics/        # data & outputs (git-ignored)
 ├── old/  RandomOther/  testGIthubCircleSquare/  # scratch / experiments (incl. old entry points)
