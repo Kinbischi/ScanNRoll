@@ -9,6 +9,21 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Added
+- **Multi-sensor UDP capture: support, hardening, and QA tooling (`rawProfileUdpCapturing.py`,
+  `rawProfileCheckCapture.py` new, `rawProfileViewer.py` new).** The acquisition path now handles a
+  centre/left/right LIDAR trio (three sensors viewing the same line from different angles) streaming
+  into one HDF5 file, tagged per profile by `source_ip`. To keep up with sustained high-rate capture
+  without dropping UDP packets: a 16 MB socket receive buffer (`SO_RCVBUF`), a periodic (every-N)
+  flush instead of flushing every profile, throttled per-packet logging (`VERBOSE` flag + a progress
+  line every N profiles), a vectorised `np.frombuffer` point parse, and a compression flag
+  (`COMPRESSION`, default off for speed); a clean Ctrl+C shutdown (`atexit`) flushes the tail.
+  **`rawProfileCheckCapture.py`** reports per-sensor NTP sync / rate / dropped-frame completeness — drops
+  counted on each sensor's **own** clock so PC arrival jitter can't fabricate them, the GO/NOT-READY
+  verdict driven by the **sync** gate — and `rawProfileUdpCapturing` runs it automatically as a
+  **warm-up pre-check** at the start of every capture (warn-only). **`rawProfileViewer.py`** stacks a
+  raw capture into a 3D PyVista cloud spaced by a hypothetical belt speed (discrete-step slider),
+  coloured by sensor, placing each profile at its own timestamp (sensor clock when synced, else the
+  common PC clock). Both new tools are standalone and off the analysis pipeline.
 - **[Side project / experimental] Print-path reconstruction + profile cladding from an OBJ mesh
   (`printPathFromObj.py`, new).** An opt-in experiment **trying out an extra feature**, kept deliberately
   **separate from the core pipeline** (top-level imports only `numpy` + `pyvista`; imported by nothing; does

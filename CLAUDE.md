@@ -52,7 +52,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full pipeline and module map.
 
 ```
 Python/
-├── rawProfileUdpCapturing.py             # ACTIVE  acquisition: sensor → HDF5
+├── rawProfileUdpCapturing.py             # ACTIVE  acquisition: multi-sensor UDP → HDF5 (source_ip-tagged; warm-up pre-check)
+├── rawProfileCheckCapture.py             # TOOL    capture QA: per-sensor NTP sync + dropped-frame completeness (CLI + warm-up)
+├── rawProfileViewer.py                   # TOOL    standalone raw-capture 3D viewer (belt-speed slider, coloured by sensor)
 ├── datasetConfig.py                      # ACTIVE  central dataset paths (RAW / PLC / derived PROCESSED)
 ├── profileProcessing.py                  # ACTIVE  process entry point: raw → processed cache
 ├── dataAnalysis.py                       # ACTIVE  plot workbench (# %% cells): cache → 3D plot (raw "before" reconstructed)
