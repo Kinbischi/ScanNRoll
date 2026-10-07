@@ -9,6 +9,21 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Added
+- **First 3D cell: snake/linear print-path switch + head/body/rupture phase layers (`profile3Dplotting.py`,
+  `dataAnalysis.py`).** `plottingClass(..., path="snake"|"linear")`: "linear" lays every profile along one
+  straight strip (no U-turns, so no segment is bent; 33 m × 68 mm on Exp1, so zoom in along it). It is the
+  existing `compute_print_path_and_angle` with an endless straight (`straight_length=np.inf`), whose U-turn
+  radius / straight length are now the named constants `PATH_TURN_RADIUS` / `PATH_STRAIGHT_LENGTH` (values
+  unchanged; the default snake is bit-identical). Picked by `PATH_LAYOUT` at the top of the cell (edit + re-run;
+  the data stays cached). A new `section=` filter on `plot()` / `get_profile_points_for_plot` ("head" / "body" /
+  "rupture" = the stored `segmentSection` codes via `SEGMENT_SECTIONS`; "unclassified" = no code) drives three new
+  off-by-default layers that each recolour their stretch of the filament ("head" = the overshoot-peak band, as
+  stored; only shape-analysed segments are classified). Two coincident point clouds drawn together **z-fight**
+  (flicker as the camera moves; measured 6-98 % of phase pixels lost), so the filament layer is built in four
+  parts by phase and `add_layer_toggles` gained an optional `covers` element: while a phase is shown it hides the
+  green part it replaces (instant visibility toggles, no global VTK state). VTK's coincident-topology depth offset
+  was rejected: it needs a global switch that visibly changed the existing baseline / z=0 line layers (4-15 % of
+  pixels). No processing change, no reprocess.
 - **Multi-sensor UDP capture: support, hardening, and QA tooling (`rawProfileUdpCapturing.py`,
   `rawProfileCheckCapture.py` new, `rawProfileViewer.py` new).** The acquisition path now handles a
   centre/left/right LIDAR trio (three sensors viewing the same line from different angles) streaming

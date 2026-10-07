@@ -5,6 +5,20 @@ import pyvista as pv
 from plcData import ALL_PLC_COLUMNS
 from profilePointsClass import profileData
 from profileProcessingAlgorithms import _is_segment, profile_advance_distances
+from segmentShape import _SECTION_BODY, _SECTION_PEAK, _SECTION_RUPTURE
+
+# Print-path layout (profile units, 1 unit = 0.01 mm), see compute_print_path_and_angle. "snake" folds the long
+# along-track strip into rows: straights of PATH_STRAIGHT_LENGTH joined by semicircular U-turns of PATH_TURN_RADIUS
+# (each row offset by 2 x radius); "linear" lays every profile along one straight strip (an endless straight).
+PATH_TURN_RADIUS = 5000.0      # U-turn radius (50 mm)
+PATH_STRAIGHT_LENGTH = 80000   # straight length between U-turns (800 mm)
+PATH_LAYOUTS = ("snake", "linear")  # plottingClass(path=...) choices
+
+# segmentSection phase codes (set by segmentShape.measure_segment_shape, on KEPT segments only) by display name, in
+# along-segment order. "head" is the band around the overshoot peak (exactly the region segmentHeadOvershoot reads),
+# not the whole start ramp; the rest of the ramp and the body->rupture shoulder carry no code ("unclassified").
+SEGMENT_SECTIONS: dict[str, float] = {"head": _SECTION_PEAK, "body": _SECTION_BODY, "rupture": _SECTION_RUPTURE}
+_SECTION_NAMES: dict[float | None, str] = {code: name for name, code in SEGMENT_SECTIONS.items()}  # code -> name (None / NaN: unclassified)
 
 # Heat-map feature display: feature -> (group, unit factor, unit label). 1 profile unit = 0.01 mm,
 # so lengths scale to mm and areas to mm^2. Features sharing a group share one colour range (clim),
@@ -225,11 +239,15 @@ def group_by_category(keys: "tuple[str, ...] | list[str]") -> list[tuple[str, li
 
 
 class plottingClass:
-    def __init__(self, profiles: list[profileData], voxel_size: float | None = None):
+    def __init__(self, profiles: list[profileData], voxel_size: float | None = None, path: str = "snake"):
         """Build the 3D print path from the profiles' physical along-track advance (see
         profile_advance_distances). `profiles` must be the same list (order/length) later passed to
         `plot()`, so each profile lands at its path point. Prefer the processed (PLC-joined) profiles,
         which carry `rollerbandSpeed`; without it the layout falls back to a uniform gap.
+
+        `path` picks the layout (PATH_LAYOUTS): "snake" (default) folds the strip into rows joined by U-turns;
+        "linear" lays every profile along one straight strip (no segment is bent around a turn, but the strip
+        is very long and thin, so zoom in along it).
 
         `voxel_size` (default None = off) downsamples the dense clouds to one point per cube of a 3-D
         grid — cube edge = `voxel_size` in profile units (1 unit = 0.01 mm) — cutting the point count
@@ -237,11 +255,15 @@ class plottingClass:
         is not a uniform on-screen spacing: steep features (filament flanks) keep points stacked
         ~`voxel_size` apart in height. Off ⇒ renders identically to before.
         """
+        if path not in PATH_LAYOUTS:
+            raise ValueError(f"path must be one of {PATH_LAYOUTS}, got {path!r}")
         self.plotter = pv.Plotter(window_size=[1280, 860])  # roomy default so the tall left feature panel fits
         self._voxel_size = voxel_size
 
         distances = profile_advance_distances(profiles)
-        self.pathPoints, self.tiltAngles = compute_print_path_and_angle(distances)
+        # "linear" = the snake with an endless straight (it never turns): one straight strip along +z
+        straight_length = PATH_STRAIGHT_LENGTH if path == "snake" else np.inf
+        self.pathPoints, self.tiltAngles = compute_print_path_and_angle(distances, straight_length)
         self.rotation_matrices = [np.array([
             [np.cos(theta), 0, np.sin(theta)],
             [0, 1, 0],
@@ -280,9 +302,10 @@ class plottingClass:
             pass
         self.plotter.show()
 
-    def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size=5,
+    def plot(self, profiles: list[profileData], plotSubject:str, colour:str, size: int = 5,
              profile_step: int = 1, point_step: int = 1, flat_colour: str | None = None,
-             category: str | None = None, spheres: bool = False) -> "object | None":
+             category: str | None = None, spheres: bool = False,
+             section: str | None = None) -> "object | None":
         """Add one subject to the 3D scene: "profile", "baseline", "zeroBaseline",
         "widthFlankPoints" (slope-peak method, uses `widthFlankIdx`), or "widthOuterPoints" (outer-filament-
         point method, uses `widthOuterIdx`).
@@ -301,6 +324,11 @@ class plottingClass:
         (uses `floorMask`); None draws all points. Call twice with different category +
         colour to show floor vs filament in two colours.
 
+        section (profiles only): "head", "body" or "rupture" draws only the profiles in that segment
+        phase (their `segmentSection` code, see SEGMENT_SECTIONS; only KEPT segments carry one), and
+        "unclassified" the profiles with no phase code; None draws every profile. Combine with
+        category="profile" for that phase's filament points.
+
         Returns the added actor (or a list of actors for the two-colour `flat_colour` case, or None if
         nothing was drawn) so the caller can toggle its visibility, e.g. via `add_layer_toggles`.
         """
@@ -308,12 +336,15 @@ class plottingClass:
             case "profile":
                 if flat_colour is None:
                     return self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step, category=category), colour, size)
+                        get_profile_points_for_plot(profiles, profile_step, point_step, category=category,
+                                                    section=section), colour, size)
                 actors = [
                     self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=False, category=category), colour, size),
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=False, category=category,
+                                                    section=section), colour, size),
                     self.add_3d_points_to_plot(
-                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=True, category=category), flat_colour, size),
+                        get_profile_points_for_plot(profiles, profile_step, point_step, want_flat=True, category=category,
+                                                    section=section), flat_colour, size),
                 ]
                 return [a for a in actors if a is not None]
             case "baseline":
@@ -365,36 +396,47 @@ class plottingClass:
             return self.plotter.add_mesh(lines, color = colour, line_width=5)
         return None
 
-    def add_layer_toggles(self, layers: "list[tuple[str, object, str, bool]]",
-                          size: int = 26, gap: int = 10) -> None:
+    def add_layer_toggles(self, layers: "list[tuple]", size: int = 26, gap: int = 10) -> None:
         """Add a left-edge checkbox per named layer to show/hide it live (independent multi-select).
 
-        `layers`: list of `(label, actors, colour, initial_on)` — `actors` is one actor or a list of actors
-        (as returned by `plot`; `None` entries are ignored), `colour` tints the label to match the layer, and
-        `initial_on` sets both the checkbox and the actors' initial visibility. Bottom-anchored on the left
-        edge (below the camera-orientation gizmo). Needs a live interactor (interactive window only).
+        `layers`: list of `(label, actors, colour, initial_on)` or `(label, actors, colour, initial_on, covers)` —
+        `actors` is one actor or a list of actors (as returned by `plot`; `None` entries are ignored), `colour`
+        tints the label to match the layer, and `initial_on` sets both the checkbox and the actors' initial
+        visibility. The optional `covers` (actor or list) are another layer's actors that this layer redraws
+        in its own colour (the same points, e.g. a segment phase over its stretch of the filament): they are
+        hidden while this layer is shown, since two coincident clouds z-fight (flicker as the camera moves).
+        Bottom-anchored on the left edge (below the camera-orientation gizmo). Needs a live interactor
+        (interactive window only).
         """
         x, n = 12, len(layers)
         self._toggle_buttons = []  # keep the widget refs alive for the lifetime of the plotter
-        for j, (label, actors, colour, on) in enumerate(layers):
-            acts = [a for a in (actors if isinstance(actors, list) else [actors]) if a is not None]
-            for a in acts:
-                a.SetVisibility(on)
+        self._layers = []          # per layer {"actors", "covers", "on"}; read by _apply_layer_visibility
+        for j, (label, actors, colour, on, *covers) in enumerate(layers):
+            layer = {"actors": _actor_list(actors), "covers": _actor_list(covers[0] if covers else None), "on": on}
+            self._layers.append(layer)
             y = 12 + (n - 1 - j) * (size + gap)  # first layer highest
             widget = self.plotter.add_checkbox_button_widget(
-                self._make_toggle_callback(acts), value=on,
+                self._make_toggle_callback(layer), value=on,
                 position=(x, y), size=size, color_on="green", color_off="grey")
             self._toggle_buttons.append(widget)
             # shadow keeps a pale label (yellow / grey) legible against a light background
             self.plotter.add_text(label, position=(x + size + 6, y + 4), font_size=12, color=colour, shadow=True)
+        self._apply_layer_visibility()
 
-    def _make_toggle_callback(self, actors: list):
-        """Click handler for one layer checkbox: show/hide that layer's actor(s)."""
+    def _make_toggle_callback(self, layer: dict):
+        """Click handler for one layer checkbox: show/hide that layer (and un-hide what it covered)."""
         def callback(state: bool) -> None:
-            for a in actors:
-                a.SetVisibility(state)
+            layer["on"] = state
+            self._apply_layer_visibility()
             self.plotter.render()
         return callback
+
+    def _apply_layer_visibility(self) -> None:
+        """Show each layer's actors iff the layer is on and no shown layer covers them."""
+        covered = {id(a) for layer in self._layers if layer["on"] for a in layer["covers"]}
+        for layer in self._layers:
+            for a in layer["actors"]:
+                a.SetVisibility(layer["on"] and id(a) not in covered)
 
     def plot_feature_heatmap(self, profiles: list[profileData],
                              features: tuple[str, ...] = ("widthFlank", "widthOuter", "heightP95", "heightSmooth", "areaSimpson", "areaShoelace"),
@@ -979,7 +1021,7 @@ class plottingClass:
 
 def get_profile_points_for_plot(profiles: list[profileData], profile_step: int = 1,
                                 point_step: int = 1, want_flat: bool | None = None,
-                                category: str | None = None):
+                                category: str | None = None, section: str | None = None) -> list[np.ndarray]:
     """Build one (N, 3) point array per profile (height goes in the plot's y slot).
 
     Returns one entry per profile so the result stays index-aligned with the print
@@ -988,12 +1030,19 @@ def get_profile_points_for_plot(profiles: list[profileData], profile_step: int =
     points within each kept profile. If want_flat is set, only profiles whose gap status
     matches it are kept — a "gap" being a profile *not* in a cleaned filament segment
     (`~isSegment`); None = no such filter. If category is "floor" or "profile", only points
-    of that category are kept (uses `floorMask`; ignored when it is None).
+    of that category are kept (uses `floorMask`; ignored when it is None). If section is
+    "head", "body" or "rupture", only profiles in that segment phase are kept (their
+    `segmentSection` code, see SEGMENT_SECTIONS); "unclassified" keeps the profiles with no
+    phase code; None = no such filter.
     """
+    if section is not None and section not in (*SEGMENT_SECTIONS, "unclassified"):
+        raise ValueError(f"section must be one of {(*SEGMENT_SECTIONS, 'unclassified')}, got {section!r}")
     points = []
     for i, profile in enumerate(profiles):
         include = i % profile_step == 0 and profile.x.shape[0] > 0
         if want_flat is not None and (not _is_segment(profile)) != want_flat:  # gap = not a segment
+            include = False
+        if section is not None and _SECTION_NAMES.get(profile.segmentSection, "unclassified") != section:
             include = False
         if include:
             xs, zs = profile.x, profile.z
@@ -1006,6 +1055,10 @@ def get_profile_points_for_plot(profiles: list[profileData], profile_step: int =
         else:
             points.append(np.empty((0, 3)))
     return points
+
+def _actor_list(actors: object) -> list:
+    """One actor, a list of actors, or None (as `plot` may return) -> a list without None entries."""
+    return [a for a in (actors if isinstance(actors, list) else [actors]) if a is not None]
 
 def width_point_arrays(profiles: list[profileData], idx_attr: str):
     """One (2, 3) point array per profile from a 2-index attribute ("widthFlankIdx" or "widthOuterIdx").
@@ -1104,12 +1157,20 @@ def line_points_from_zero(profiles: list[profileData]):
 #TODO: currently, print path is in xz plane and profile height in y plane
 # --> this is confusing --> change profile output to y for height
 # also think about unit and label all unit dep. empirical constants
-def compute_print_path_and_angle(distances):
-    
+def compute_print_path_and_angle(distances: np.ndarray, straight_length: float = PATH_STRAIGHT_LENGTH
+                                 ) -> "tuple[list[np.ndarray], list[float]]":
+    """Lay the profiles out along the print path from their along-track advance `distances` (profile units).
+
+    Returns one path point (x, 0, z) and one tilt angle (rad, rotation about the height/y axis) per profile.
+    The snake runs `straight_length` along z, then a semicircular U-turn of PATH_TURN_RADIUS shifts it by
+    -2 x radius in x and reverses it. `straight_length=np.inf` never turns: one straight strip along +z with
+    tilt 0 (the "linear" layout).
+    """
+
     # path parameters
-    path_radius = 5000.0 # radius of the curved sweep in XY plane
+    path_radius = PATH_TURN_RADIUS # radius of the U-turns (x-z plane)
     totalCurveDist = path_radius * np.pi
-    totalStraightDist = 80000
+    totalStraightDist = straight_length
 
     #initializations
     cx=cz=0

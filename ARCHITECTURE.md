@@ -46,7 +46,7 @@ The system has two halves that meet at an HDF5 file:
 | `segmentShape.py` | `measure_segment_shape()` — per-segment shape features describing how a filament segment's cross-section evolves along the print path (startup bulge → body taper → abrupt rupture): `segmentBodyThinning`/`segmentBodyThinningStability` (fit over the ±band body plateau), `segmentCriticalArea` + `segmentCriticalWidth` + `segmentRuptureLength` (all read at the derivative-cliff **rupture start**, gated by `segmentRuptures`), `segmentHeadOvershoot`, and a per-profile `segmentSection` flag (1 body / 2 rupture / 3 overshoot-peak; start + shoulder NaN). Broadcast per segment like the run aggregates. Imports `profilePointsClass` + `profileProcessingAlgorithms` (run helpers + spacing). | Active |
 | `profileLoading.py` | `load_profiles()` / `save_profiles()` — read/write `profileData` to HDF5. `save_profiles` writes the processed cache as a **columnar table** (padded `[N,L]` points, `[N,2]` index pairs, `[N]` scalar columns, names) for fast bulk loading; `load_profiles` reads that, and reads raw acquisition files (`x`/`z` + `arrival_time`, rest ignored), but **rejects** an old per-group *processed* cache with a "reprocess" error. `read_file_attrs()` returns file-level attributes (e.g. `raw_start`/`raw_end`). | Active |
 | `plcData.py` | Load the machine PLC log (YT-Scope CSV) and join it to the profiles by timestamp. Owns the staging `PlcLog` dataclass, `load_plc_csv` (FILETIME→Unix, clock-offset corrected), and `join_plc_to_profiles` (nearest-sample; drops profiles outside the mutual overlap). `PLC_COLUMNS` = the 10 raw CSV channels (drives parsing); `ALL_PLC_COLUMNS` = those + `DERIVED_PLC_COLUMNS` (`pipePressureDifference`, `flowVelocity`, `conveyorExtrusionVelocityDifference` — `profileData` properties computed from the raw channels, no cache slot) = the channel set the plots offer. Imports only `profilePointsClass`. | Active |
-| `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the serpentine print path (per-profile along-track advance from `rollerbandSpeed` × dt, via `profile_advance_distances`, imported from `profileProcessingAlgorithms`) & tilt angles and places each profile along it. Points are batched into one actor per `plot()` call. Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
+| `profile3Dplotting.py` | `plottingClass` — PyVista 3D rendering; builds the print path (per-profile along-track advance from `rollerbandSpeed` × dt, via `profile_advance_distances`, imported from `profileProcessingAlgorithms`) & tilt angles and places each profile along it — a serpentine **snake** (default; straights of `PATH_STRAIGHT_LENGTH` joined by U-turns of `PATH_TURN_RADIUS`) or one straight **linear** strip (`path="linear"`). Points are batched into one actor per `plot()` call (filterable by `category=` floor/filament and `section=` segment phase, `SEGMENT_SECTIONS`). Owns `FEATURE_DISPLAY` (feature → unit factor + label), the heat-map's display map. | Active |
 | `featureComparison.py` | `compare_features()` — matplotlib 2D comparison of per-profile features + PLC channels over time: a lone curve → its real units; several shown → an **"overlay y-axis" toggle** picks a shared real-unit axis when they share a unit (`shared_unit()`, incl. cross-family conversion like mL/min→L/min) else a robust normalised 0–1 overlay (percentile-clipped). Category-grouped, colour-matched `CheckButtons` panel to toggle/smooth curves. Owns the shared `_feature_values`/`_scale_range`/`_normalise`/`shared_unit` helpers. Imports `profilePointsClass` + `FEATURE_DISPLAY` + `group_by_category`. | Active |
 | `featurePlcTrends.py` | `plot_feature_plc_trends()` — matplotlib 2D feature-vs-PLC correlation plot, one `kind` per call: `"stepwise"` (discrete channel on x → box/violin per level) or `"continuous"` (hexbin density + trend, with **any subject on either axis** — a shared feature+channel pool feeds a single-select x-picker and multi-select y-panel, both category-grouped, so feature-vs-channel / channel-vs-channel / feature-vs-feature all work); Spearman r; several y → central trend lines on a shared real-unit axis (`shared_unit`) or normalised 0–1 per the **"overlay y-axis" toggle**. Live median/mean statistic radio, and (stepwise) a box/violin shape radio + channel radio; constant channels force-shown; idle excluded; fixed x-axis (stepwise). Segment/defect features are aggregated **per run** in the stepwise view (one point per segment/defect) with `n=` counts, a >3-runs box rule, and >0.5 m / cross-level exclusions. Reuses `featureComparison`'s value/scale helpers, `FEATURE_DISPLAY`, `group_by_category`, and `profileProcessingAlgorithms._contiguous_runs`. | Active |
 | `featureProportion.py` | `plot_feature_proportion()` — matplotlib **per-segment** proportionality scatter (one point per filament segment, run-collapsed like the stepwise run features). Each axis is a **product of up to two `feature ^ power` terms**, built live from four radio columns (x·term1/2, y·term1/2 + a power radio each), so you can test relations like `rollerbandSpeed · segmentCriticalWidth ∝ segmentCriticalArea²` (the default). Two readouts: a through-origin fit `y = k·x` (k, R², Pearson r) and the log-log fitted exponent m (the measured power); a linear/log-log axes toggle. Per-segment scalars = nan-median over the segment's non-idle profiles (a broadcast feature = its constant); colour = per-segment `rollerbandSpeed`. Reuses `featureComparison._feature_values`, `FEATURE_DISPLAY`, and `profileProcessingAlgorithms._contiguous_runs`/`_segment_mask`. | Active |
@@ -71,7 +71,7 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
  profilePointsClass          base layer — the profileData model only, no project imports
    ▲    ▲    ▲    ▲
    │    │    │    └── plcData                PLC CSV load + timestamp join (imports profilePointsClass)
-   │    │    └─────── profile3Dplotting      PyVista plotting (imports profilePointsClass + plcData + profileProcessingAlgorithms)
+   │    │    └─────── profile3Dplotting      PyVista plotting (imports profilePointsClass + plcData + profileProcessingAlgorithms + segmentShape codes)
    │    │                   ▲
    │    │                   └── featureComparison   matplotlib 2D feature overlay (imports FEATURE_DISPLAY)
    │    │                             ▲
@@ -99,8 +99,9 @@ Legacy modules still use `from <module> import *`; newer/edited code uses explic
 
 Edges: `profileProcessingAlgorithms`, `profileLoading`, `profile3Dplotting`, and `plcData` each
 import `profilePointsClass`; `profileLoading` also imports `profileProcessingAlgorithms`
-(`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`ALL_PLC_COLUMNS`) and
-`profileProcessingAlgorithms` (`profile_advance_distances`); and
+(`FLATNESS_RMS_THRESHOLD`); `profile3Dplotting` imports `plcData` (`ALL_PLC_COLUMNS`),
+`profileProcessingAlgorithms` (`profile_advance_distances`) and `segmentShape` (the `segmentSection` phase
+codes); and
 `featureComparison` imports `profilePointsClass` + `profile3Dplotting` (`FEATURE_DISPLAY`,
 `group_by_category`); and
 `featurePlcTrends` imports `featureComparison` (the `_feature_values`/`_scale_range`/`_normalise`
@@ -138,7 +139,7 @@ save_profiles(profiles, OUT, kind=..., raw_start=…, raw_end=…)  # profileLoa
 **Plot** (`dataAnalysis.py`, run freely):
 ```
 load_profiles(PROCESSED_FILE)            # profileLoading  → list[profileData]
-plottingClass(profiles, voxel_size=…)    # profile3Dplotting: precompute path + tilt from the profiles
+plottingClass(profiles, voxel_size=…, path=…)  # profile3Dplotting: precompute path ("snake"/"linear") + tilt
 plotter.plot(profiles, "profile", green) # batched: one actor for all profiles
 plotter.plot(profiles, "widthPoints", …) # mark width peaks
 plotter.show()                           # interactive PyVista window
@@ -233,10 +234,14 @@ even on a sorted-out segment so the rupture *rate* survives; the sort-out is sha
 The plot workbench (`dataAnalysis.py`) draws floor vs filament in two colours (`category=`), flat
 profiles highlighted (`flat_colour=`), the floor baselines and a `z = 0` reference
 (`"baseline"` / `"zeroBaseline"`), and both width methods' points (`"widthFlankPoints"` /
-`"widthOuterPoints"`). The first 3D cell ("preprocessing") merges the raw/processed overlay, the floor/filament category, and the
+`"widthOuterPoints"`). The first 3D cell ("preprocessing") merges the raw/processed overlay, the floor/filament category, the
+segment phases (head / body / rupture = the stored `segmentSection` codes, `section=`), and the
 width-marker views into one scene with a **left-edge show/hide checkbox per layer** (`add_layer_toggles`;
 `plot()` and its `add_3d_points_to_plot` / `add_lines_to_plot` helpers return the added actor so it can be
-toggled). Every cell starts with `from dataAnalysisSetup import …` + `raw, processed = load()`, so any cell can be
+toggled). A layer may **cover** another layer's actors (an optional 5th tuple element): while shown it hides
+them, so a phase layer replaces its own green stretch of the filament (built in four parts by phase) instead of
+being drawn over an identical copy, which would z-fight (flicker). `PATH_LAYOUT` at the top of the cell picks
+the snake or linear path. Every cell starts with `from dataAnalysisSetup import …` + `raw, processed = load()`, so any cell can be
 run first in a fresh kernel — `dataAnalysisSetup.load()` reads the cache + reconstructs raw once and caches it. It can
 also colour the cloud by a per-profile feature with a live selector panel (`plot_feature_heatmap`; the
 feature buttons are grouped under Geometry / Segment / PLC headers).
@@ -438,7 +443,7 @@ Severity is relative to *current* behaviour. Full remediation backlog in
 | 1 | **`.y` vs `.z` mismatch.** `profileRegistration.py` reads `.y`, but `profileData` only defines `x`/`z`. | High *(latent)* — does not affect the active path, but the registration pipeline will `AttributeError` the moment it is re-enabled. |
 | 2 | ~~**Name collision** between the wire-format `ProfileData` (`rawProfileUdpCapturing.py`) and analysis `profileData` (`profilePointsClass.py`).~~ **Resolved:** the wire-format class is now `ProfileDataRaw`. | — |
 | 3 | **Wildcard imports** (`from x import *`) — now confined to the dormant `profileRegistration.py`; the active analysis modules use explicit imports. | Low — limited to off-path legacy code. |
-| 4 | **Magic constants** — many are now named in `profileProcessingAlgorithms.py` (`MIN_PROFILE_POINTS`, `FLOOR_POINT_THRESHOLD`, the positional-prior, slope-peak and smoothing-window constants). Still un-named: path geometry `2000/5000/80000` (`profile3Dplotting.py`), the UDP address/port and parser byte offsets (`rawProfileUdpCapturing.py`). Values are unit-dependent (1 unit ≈ 0.01 mm). | Medium — a shared `config` module is still wanted for the rest. |
+| 4 | **Magic constants** — many are now named in `profileProcessingAlgorithms.py` (`MIN_PROFILE_POINTS`, `FLOOR_POINT_THRESHOLD`, the positional-prior, slope-peak and smoothing-window constants). The path geometry is now named too (`PATH_TURN_RADIUS` / `PATH_STRAIGHT_LENGTH` in `profile3Dplotting.py`, the `UNIFORM_PROFILE_DISTANCE` fallback in `profileProcessingAlgorithms.py`). Still un-named: the UDP address/port and parser byte offsets (`rawProfileUdpCapturing.py`). Values are unit-dependent (1 unit ≈ 0.01 mm). | Medium — a shared `config` module is still wanted for the rest. |
 | 5 | **Dead code & unused imports** (active pipeline cleared): the CSV loaders, `find_border_points`, the `borderPoints` field, and unused imports were removed. Remaining is out-of-scope legacy (`profileRegistration.py`); the `profilePointsClass.py` max-height block is intentionally kept for later (the area block it sat with is now implemented as `measure_filament_area`). | Low — clutter, risk of "fixing" code that never runs. |
 | 6 | **Missing type hints & docstrings** on most module-level functions. | Low/Medium — slows comprehension; no static-analysis safety net. |
 | 7 | **No error handling at boundaries**: HDF5 load assumes well-formed files; UDP parser uses a broad `except Exception` and unbounded buffering dicts. | Medium — silent data loss / memory growth on malformed or out-of-order packets. |

@@ -32,7 +32,7 @@ try:
 except (ImportError, AttributeError):
     pass
 
-PROFILE_STEP = 3   # draw every Nth profile  (3D subsampling; points ~ total / (PROFILE_STEP * POINT_STEP))
+PROFILE_STEP = 1   # draw every Nth profile  (3D subsampling; points ~ total / (PROFILE_STEP * POINT_STEP))
 POINT_STEP = 2     # draw every Nth point
 VOXEL_SIZE = 10    # keep one point per cube of this edge (profile units, 0.01 mm; None = off) — see plottingClass
 

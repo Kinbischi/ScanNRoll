@@ -1,17 +1,33 @@
-# %% 3D preprocessing (togglable) — raw/processed clouds, floor baselines + z=0, floor/filament, width markers; a left-edge checkbox toggles each layer
+# %% 3D preprocessing (togglable) — raw/processed clouds, floor baselines + z=0, floor/filament, segment phases (head/body/rupture), width markers; a left-edge checkbox toggles each layer
 # Setup lives in dataAnalysisSetup.py, so any cell can be clicked and run first in a fresh kernel; load() caches.
 from dataAnalysisSetup import PROFILE_STEP, POINT_STEP, VOXEL_SIZE, load, profile3Dplotting
+PATH_LAYOUT = "linear"  # print-path layout: "snake" (rows joined by U-turns) or "linear" (one straight strip); edit + re-run
 raw, processed = load()
-pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE)
-pl.add_layer_toggles([  # (label, actor(s), label colour, shown at start) — floor + filament category view on by default
+pl = profile3Dplotting.plottingClass(processed, voxel_size=VOXEL_SIZE, path=PATH_LAYOUT)
+# the filament in four parts by segment phase (segmentSection; only shape-analysed segments have one), so each phase
+# layer below can recolour its own stretch: while shown, it replaces that green part (overlapping copies would flicker)
+filament_parts = {s: pl.plot(processed, "profile", "green", category="profile", section=s,
+                             profile_step=PROFILE_STEP, point_step=POINT_STEP)
+                  for s in ("unclassified", "head", "body", "rupture")}
+pl.add_layer_toggles([  # (label, actor(s), label colour, shown at start[, actor(s) it replaces while shown]) — floor + filament on by default
     ("raw",         pl.plot(raw, "profile", "grey", profile_step=PROFILE_STEP, point_step=POINT_STEP),       "grey",        False),
     ("processed",   pl.plot(processed, "profile", "green", profile_step=PROFILE_STEP, point_step=POINT_STEP), "green",       False),
     ("baseline",    pl.plot(processed, "baseline", "red"),                                                    "red",         False),
     ("z=0 ref",     pl.plot(processed, "zeroBaseline", "yellow"),                                             "yellow",      False),
     ("floor",       pl.plot(processed, "profile", "saddlebrown", category="floor",
                             profile_step=PROFILE_STEP, point_step=POINT_STEP),                                "saddlebrown", True),
-    ("filament",    pl.plot(processed, "profile", "green", category="profile",
-                            profile_step=PROFILE_STEP, point_step=POINT_STEP),                                "green",       True),
+    ("filament",    list(filament_parts.values()),                                                            "green",       True),
+    # segment phases: shown with "filament" on, the rest stays green; untick "filament" for the phases alone.
+    # head = the band around the overshoot peak (what segmentHeadOvershoot reads), not the whole start ramp
+    ("head",        pl.plot(processed, "profile", "orange", category="profile", section="head",
+                            profile_step=PROFILE_STEP, point_step=POINT_STEP),                                "orange",      False,
+                    filament_parts["head"]),
+    ("body",        pl.plot(processed, "profile", "royalblue", category="profile", section="body",
+                            profile_step=PROFILE_STEP, point_step=POINT_STEP),                                "royalblue",   False,
+                    filament_parts["body"]),
+    ("rupture",     pl.plot(processed, "profile", "crimson", category="profile", section="rupture",
+                            profile_step=PROFILE_STEP, point_step=POINT_STEP),                                "crimson",     False,
+                    filament_parts["rupture"]),
     ("width flank", pl.plot(processed, "widthFlankPoints", "red", size=15, spheres=True),                     "red",         False),
     ("width outer", pl.plot(processed, "widthOuterPoints", "blue", size=15, spheres=True),                    "blue",        False),
 ])
