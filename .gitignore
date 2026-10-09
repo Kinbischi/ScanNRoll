@@ -50,3 +50,7 @@ testGIthubCircleSquare/
 
 # Large reference binaries
 *.pdf
+
+# Video editing side project: videos + generated frames/caches stay local (the code + README are tracked)
+VideoEditing/*.mp4
+VideoEditing/work/

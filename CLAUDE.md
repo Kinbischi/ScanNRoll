@@ -71,6 +71,7 @@ Python/
 ├── featureRates.py                       # ACTIVE  matplotlib 2D per-rollerband-speed pooled-rate bars (RATE_METRICS registry: neckRate / breakRate / ruptureFraction)
 ├── exportSegmentAreas.py                 # ACTIVE  export each KEPT segment's areaShoelace series (+capture time) to CSV, one file per belt speed
 ├── printPathFromObj.py                   # SIDE PROJECT (experimental, standalone)  reconstruct print path from a Rhino OBJ mesh + clad it with profiles (numpy+pyvista; off the pipeline)
+├── VideoEditing/zoomInsert/              # SIDE PROJECT (video editing)  zoom insert + smoother effects for the presentation video (see VideoEditing/README.md; videos + work/ git-ignored)
 ├── profileRegistration.py                # LEGACY  alignment/joining (dormant, has .y bug)
 ├── HDf5data/  ProfileData/  Pics/        # data & outputs (git-ignored)
 ├── old/  RandomOther/  testGIthubCircleSquare/  # scratch / experiments (incl. old entry points)

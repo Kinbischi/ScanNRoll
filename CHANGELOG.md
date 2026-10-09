@@ -9,6 +9,16 @@ This project does not yet use formal version numbers; changes accumulate under
 ## [Unreleased]
 
 ### Added
+- **[Side project / video editing] Zoom-into-the-point-cloud insert for the presentation video
+  (`VideoEditing/zoomInsert/`, new; see `VideoEditing/README.md`).** Separate from the pipeline (imports nothing
+  into it; only reads the processed cache + plotting helpers like the first `dataAnalysis` cell). Splices a 7.6 s
+  zoom into `transitionToScanSequence_smooth.mp4` at 0:15 (ease in along the bead → drift → orbit to a side view →
+  back to the close-up), in two versions: plain, and with a magenta line tracing one scan profile and a stack of 12
+  profiles. Also re-renders the static tail of the video with smoother effects at the original times (crisp blue
+  edge points sweeping in/out instead of lumpy spheres popping; soft head→tail sweeps for the body / rupture
+  colours). The close-up camera of the existing video was reconstructed by fitting renders to its frames; the fit
+  shows that video's 3D view draws the data ~23 % taller (and ~1.8 % longer along the belt) than true scale, which
+  the insert inherits for a seamless splice. Videos and generated frames are git-ignored.
 - **First 3D cell: snake/linear print-path switch + head/body/rupture phase layers (`profile3Dplotting.py`,
   `dataAnalysis.py`).** `plottingClass(..., path="snake"|"linear")`: "linear" lays every profile along one
   straight strip (no U-turns, so no segment is bent; 33 m × 68 mm on Exp1, so zoom in along it). It is the
